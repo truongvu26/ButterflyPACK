@@ -352,6 +352,14 @@ private:
 class MetaBuilder {
 public:
     MetaBuilder() = default;
+    // Metadata builders also live in individual HODLR matrices, not only in
+    // the process-wide PinnedPool. Fence their last upload before releasing
+    // the host image. CUDA errors cannot escape a destructor during unwinding.
+    ~MetaBuilder() noexcept {
+        if (pending_) cudaEventSynchronize(uploaded_);
+        if (base_ != nullptr) cudaFreeHost(base_);
+        if (uploaded_ != nullptr) cudaEventDestroy(uploaded_);
+    }
     MetaBuilder(const MetaBuilder&) = delete;
     MetaBuilder& operator=(const MetaBuilder&) = delete;
 
@@ -406,7 +414,11 @@ private:
     void ensure(size_t bytes) {
         if (bytes <= capacity_) return;
         wait_upload();
-        constexpr size_t granule = size_t{64} << 20;
+        // Most HODLR fronts need only a few KiB of metadata. A 64 MiB
+        // minimum here pins gigabytes across a sparse elimination tree.
+        // Keep geometric growth for large H2 waves without imposing their
+        // staging-buffer granularity on every matrix's metadata image.
+        constexpr size_t granule = size_t{64} << 10;
         const size_t grown = (std::max(bytes, 2 * capacity_) + granule - 1) / granule * granule;
         void* fresh = nullptr;
         check_cuda(cudaMallocHost(&fresh, grown), "cudaMallocHost");
@@ -419,7 +431,7 @@ private:
     char* base_ = nullptr;
     size_t size_ = 0;
     size_t capacity_ = 0;
-    cudaEvent_t uploaded_ = nullptr;  // after the last upload (never destroyed: see PinnedPool)
+    cudaEvent_t uploaded_ = nullptr;  // after the last upload; owned by this builder
     bool pending_ = false;
 };
 
