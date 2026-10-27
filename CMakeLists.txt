@@ -633,6 +633,11 @@ if (enable_h2_gpu)
                  GPU_BACKEND/h2_gpu/tests/batch_determinism.cpp)
   target_compile_definitions(h2_gpu_batch_determinism PRIVATE H2_HAVE_GPU)
   target_link_libraries(h2_gpu_batch_determinism butterflypack)
+  # Keep many real/complex front states alive with a shared-device heap;
+  # cuSOLVER ownership must not grow with the number of fronts.
+  add_executable(hodlr_gpu_solver_resource_reuse EXCLUDE_FROM_ALL
+                 GPU_BACKEND/hodlr_gpu/tests/solver_resource_reuse.cpp)
+  target_link_libraries(hodlr_gpu_solver_resource_reuse butterflypack)
 endif()
 
 set_target_properties(butterflypack PROPERTIES
