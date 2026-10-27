@@ -1127,6 +1127,7 @@ public:
     // Free the blocks of the level
     void end() {
         release_out();
+        evaluator_=nullptr;
         if (blocks_.empty() && sel_rows_d_ == nullptr) return;
         Context::instance().activate();
         check_cuda(cudaStreamSynchronize(Context::instance().stream()), "HODLR GPU BACA end");

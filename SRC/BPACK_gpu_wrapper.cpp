@@ -670,12 +670,14 @@ void c_bpack_hodlr_gpu_collective_mode(void* gpu,int* enabled) {
 }
 void c_bpack_gpu_finish_host_panels(void* gpu,bpack_gpu_host_panel_stats* stats) {
 #ifdef BPACK_GPU_ENABLED
-  auto* st=state_of(gpu,"finish host panels");
-  if (!st->evaluator || !st->evaluator->collective())
-    gpu_fail("finish host panels","no host panel evaluator registered");
-  fmm::gpu::check_cuda(cudaStreamSynchronize(fmm::gpu::Context::instance().stream()),"host panel callback lifetime");
-  if (stats) *stats=st->evaluator->host_panel_stats();
-  st->evaluator.reset();
+  try {
+    auto* st=state_of(gpu,"finish host panels");
+    if (!st->evaluator || !st->evaluator->collective())
+      throw std::logic_error("no host panel evaluator registered");
+    fmm::gpu::check_cuda(cudaStreamSynchronize(fmm::gpu::Context::instance().stream()),"host panel callback lifetime");
+    if (stats) *stats=st->evaluator->host_panel_stats();
+    st->evaluator.reset();
+  } catch (const std::exception& e) { gpu_fail("finish host panels",e.what()); }
 #endif
 }
 
