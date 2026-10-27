@@ -73,6 +73,12 @@ keeps 130 real/complex construction states alive per rank, checks external
 memory growth, and reuses surviving states after other states are destroyed.
 Run it with two ranks sharing each GPU and the default pool fraction.
 
+The STRUMPACK 150-cubed sparse run passed on 32 ranks and 16 A100 40 GB
+GPUs at the default 0.85 pool fraction, with one audited handle and parameter
+object per process. Focused stress, expected unpatched failure and full-solver
+provenance are recorded in
+[`doc/strumpack_cusolver_resource_reuse.json`](../../doc/strumpack_cusolver_resource_reuse.json).
+
 ## Environment variables
 
 [`doc/environment_variables.md`](../doc/environment_variables.md) describes

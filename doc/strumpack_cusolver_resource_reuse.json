@@ -1,0 +1,144 @@
+{
+  "status": "PASS",
+  "butterflypack_branch": "fix/gpu-cusolver-resource-reuse",
+  "implementation_revision": "a22b149",
+  "regression_revision": "313b393",
+  "driver_revision": "24c5b4ae",
+  "library_sha256": "5bf529871090ef85494eec39861bdcfe7d856f3b83b2f1f34b4e9db10db6d0a6",
+  "layout": {
+    "grid": 150,
+    "unknowns": 3375000,
+    "rhs": 3,
+    "nodes": 4,
+    "mpi_ranks": 32,
+    "gpus": 16,
+    "ranks_per_gpu": 2,
+    "omp_threads": 1,
+    "gpu_memory_gb": 40
+  },
+  "settings": {
+    "bpack_gpu_heap_fraction": 0.85,
+    "entry_image_cap_bytes": 268435456,
+    "compression_tolerance": 1e-05,
+    "solver_tolerance": 1e-10
+  },
+  "focused_validation": {
+    "status": "PASS",
+    "job": "60403880",
+    "heap_fraction": 0.85,
+    "cases": [
+      {
+        "case": "resource",
+        "status": "PASS",
+        "ranks": 4,
+        "handles_per_process": 1,
+        "params_per_process": 1
+      },
+      {
+        "case": "square",
+        "status": "PASS",
+        "ranks": 4,
+        "handles_per_process": 1,
+        "params_per_process": 1
+      },
+      {
+        "case": "rectangular",
+        "status": "PASS",
+        "ranks": 4,
+        "handles_per_process": 1,
+        "params_per_process": 1
+      },
+      {
+        "case": "rectangular3",
+        "status": "PASS",
+        "ranks": 3,
+        "handles_per_process": 1,
+        "params_per_process": 1
+      },
+      {
+        "case": "poisson",
+        "status": "PASS",
+        "ranks": 4,
+        "handles_per_process": 1,
+        "params_per_process": 1
+      }
+    ],
+    "unpatched_control": "EXPECTED_CUSOLVER_RESOURCE_FAILURE",
+    "relative_error": 8.93456e-12,
+    "scaled_residual": 3.17358e-10
+  },
+  "external_memory_growth_bytes_by_rank": [
+    0,
+    0,
+    0,
+    0
+  ],
+  "jobs": {
+    "quiet_gpu": 60405138,
+    "diagnostic_gpu": 60403959
+  },
+  "quiet_result": {
+    "status": "PASS",
+    "relative_error": 7.40232e-10,
+    "scaled_residual": 4.50852e-08,
+    "factor_seconds": 700.746,
+    "solve_seconds": 4.84832,
+    "factor_plus_solve_seconds": 705.5943199999999,
+    "hodlr_fronts": 1980.0,
+    "refinement_iterations": 9.0,
+    "cusolver_resource_audit": {
+      "ranks": 32,
+      "handles_per_process": 1,
+      "params_per_process": 1,
+      "creation_failures": 0
+    }
+  },
+  "diagnostic_result": {
+    "status": "PASS",
+    "relative_error": 3.72815e-10,
+    "scaled_residual": 2.673e-08,
+    "factor_seconds": 717.034,
+    "solve_seconds": 7.93349,
+    "factor_plus_solve_seconds": 724.96749,
+    "hodlr_fronts": 1980.0,
+    "refinement_iterations": 9.0,
+    "cusolver_resource_audit": {
+      "ranks": 32,
+      "handles_per_process": 1,
+      "params_per_process": 1,
+      "creation_failures": 0
+    }
+  },
+  "diagnostic_recovery": {
+    "status": "PASS_AFTER_REPORT_PARSER_FIX",
+    "job": 60403959,
+    "original_batch_status": "FAILED",
+    "solver_exit_code": 0,
+    "reason": "Hardware inventory parser did not strip MiB units; corrected offline without rerunning the solver",
+    "resource_audit": {
+      "ranks": 32,
+      "handles_per_process": 1,
+      "params_per_process": 1,
+      "creation_failures": 0
+    }
+  },
+  "default_pool_workaround_required": false,
+  "quiet_batch_status": "COMPLETED",
+  "reference_run": {
+    "job": 60399062,
+    "pool_fraction": 0.5,
+    "factor_seconds": 713.617,
+    "solve_seconds": 4.83595,
+    "total_seconds": 718.45295,
+    "comparison": "Separate single trials; no statistically established speed improvement is claimed"
+  },
+  "notes": [
+    "The frozen STRUMPACK executables are unchanged; only the preloaded ButterflyPACK library changes.",
+    "The resource audit interposes actual cuSOLVER handle and parameter creation calls.",
+    "The original library reproduced cusolverDnCreate status 7 under the same many-live-states stress.",
+    "Raw logs, traces, executables and build folders remain locally ignored.",
+    "The tiled distributed frontal evaluator is a separate design; it is not enabled by this resource fix.",
+    "Full-size reruns are pinned to gpu&hbm40g; the queued diagnostic constraint was updated before allocation.",
+    "The quiet full-size job completed successfully. Diagnostic solver step also completed with exit 0; its batch failed only during metadata parsing and was reanalyzed offline after stripping MiB units."
+  ]
+}
