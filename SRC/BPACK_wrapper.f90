@@ -4748,12 +4748,26 @@ contains
       type(c_ptr) :: bf_Cptr
       integer(c_int) :: mode
       type(matrixblock), pointer :: blocks
-      integer(c_int) :: available
+      integer(c_int) :: available,dim
+      integer(c_int64_t) :: count
+      integer(c_int64_t), allocatable :: ids(:)
+      real(c_double) :: xyz(1,1)
+      integer i
       call c_f_pointer(bf_Cptr,blocks)
       call c_bpack_gpu_available(available)
       call assert(available==1 .and. mode>0, 'Rectangular GPU backend unavailable')
       call assert(blocks%level_butterfly==0, 'Rectangular GPU requires butterfly level zero')
-      if (.not. c_associated(blocks%standalone_gpu)) call c_bpack_gpu_create(blocks%standalone_gpu)
+      if (.not. c_associated(blocks%standalone_gpu)) then
+         call c_bpack_gpu_create(blocks%standalone_gpu)
+         count=int(blocks%M,c_int64_t)+int(blocks%N,c_int64_t)
+         dim=0; xyz=0
+         allocate(ids(count))
+         do i=1,int(count)
+            ids(i)=i-1
+         enddo
+         call c_bpack_hodlr_gpu_set_points(blocks%standalone_gpu,count,dim,xyz,ids)
+         deallocate(ids)
+      endif
    end subroutine C_BF_Enable_GPU
 
    subroutine C_BF_Get_GPU(bf_Cptr, gpu) bind(c, name="c_bf_get_gpu")
