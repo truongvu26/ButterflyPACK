@@ -1418,6 +1418,7 @@ private:
     // device time of the entry evaluations (Stats::t_entry): an event pair
     // around each launch, read after the synchronization that follows
     void entry_begin(cudaStream_t stream) {
+        if (evaluator_ && evaluator_->collective()) return; // host preparation has separate wall counters
         cudaEvent_t a = nullptr, b = nullptr;
         check_cuda(cudaEventCreate(&a), "HODLR GPU entry timer");
         check_cuda(cudaEventCreate(&b), "HODLR GPU entry timer");
@@ -1425,6 +1426,7 @@ private:
         entry_events_.push_back({a, b});
     }
     void entry_end(cudaStream_t stream) {
+        if (evaluator_ && evaluator_->collective()) return;
         check_cuda(cudaEventRecord(entry_events_.back().second, stream), "HODLR GPU entry timer");
     }
     void entry_collect() {

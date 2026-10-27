@@ -5,6 +5,7 @@
 // (enable_h2_gpu) get the backend, the others stubs that report its absence.
 
 #include <mpi.h>
+#include "bpack_gpu.h"
 
 #include <algorithm>
 #include <cstdint>
@@ -653,6 +654,28 @@ void c_bpack_hodlr_gpu_warm_up(void* gpu, const int* construct, const int* evalu
   (void)gpu;
   (void)construct;
   (void)evaluate;
+#endif
+}
+
+// Full-front collective preparation is opt-in; the ordinary GPU callbacks
+// remain rank-local. Called on every front rank, including empty owners.
+void c_bpack_hodlr_gpu_collective_mode(void* gpu,int* enabled) {
+  *enabled=0;
+#ifdef BPACK_GPU_ENABLED
+  if (gpu) {
+    auto* st=state_of(gpu,"collective panel mode");
+    *enabled=st->evaluator && st->evaluator->collective()?1:0;
+  }
+#endif
+}
+void c_bpack_gpu_finish_host_panels(void* gpu,bpack_gpu_host_panel_stats* stats) {
+#ifdef BPACK_GPU_ENABLED
+  auto* st=state_of(gpu,"finish host panels");
+  if (!st->evaluator || !st->evaluator->collective())
+    gpu_fail("finish host panels","no host panel evaluator registered");
+  fmm::gpu::check_cuda(cudaStreamSynchronize(fmm::gpu::Context::instance().stream()),"host panel callback lifetime");
+  if (stats) *stats=st->evaluator->host_panel_stats();
+  st->evaluator.reset();
 #endif
 }
 

@@ -23,6 +23,7 @@
 #include "device_heap.hpp"
 #include "device_kernels.hpp"
 #include "evaluator_device.hpp"
+#include "host_panel_preparation.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -39,7 +40,7 @@ namespace gpu {
 
 class Evaluator {
 public:
-    enum class Form { entry, block, list };
+    enum class Form { entry, block, list, host_panels };
 
     Evaluator(const Evaluator&) = delete;
     Evaluator& operator=(const Evaluator&) = delete;
@@ -98,6 +99,17 @@ public:
         return e;
     }
 
+    static std::shared_ptr<Evaluator> from_host_panels(bpack_gpu_host_block_callback callback,void* user,
+                                                       MPI_Comm comm,size_t budget,int scalar_bytes,int column_base=0) {
+        std::shared_ptr<Evaluator> e(new Evaluator(Form::host_panels,0,scalar_bytes));
+        e->host_panels_=std::make_shared<HostPanelPreparation>(callback,user,comm,budget,column_base);
+        e->origin_="GPU BACA with collective host-prepared panels";
+        return e;
+    }
+    bool collective() const { return static_cast<bool>(host_panels_); }
+    bpack_gpu_host_panel_stats host_panel_stats() const {
+        return host_panels_?host_panels_->stats():bpack_gpu_host_panel_stats{};
+    }
     Form form() const { return form_; }
     int scalar_bytes() const { return scalar_bytes_; }
     bool symmetric() const { return (flags_ & BPACK_GPU_SYMMETRIC) != 0; }
@@ -114,6 +126,11 @@ public:
     template<typename T>
     void eval(const std::vector<EvalItemT<T>>& host_items, const EvalItemT<T>* items, int max_m, int max_n,
               const char* meta, const PointTable& points, cudaStream_t stream) const {
+        if (host_panels_) {
+            check_type<T>();
+            host_panels_->eval<T>(host_items,meta,points,stream);
+            return;
+        }
         if (host_items.empty() || max_m <= 0 || max_n <= 0) return;
         check_type<T>();
         if (form_ == Form::entry) {
@@ -214,7 +231,7 @@ public:
     // seconds (0 when it already ran or count is 0).
     template<typename T>
     double warm_up(const PointTable& points, int count, cudaStream_t stream) const {
-        if (warmed_ || count <= 0) return 0.0;
+        if (host_panels_ || warmed_ || count <= 0) return 0.0;
         warmed_ = true;
         check_type<T>();
         const auto t0 = std::chrono::steady_clock::now();
@@ -431,6 +448,7 @@ private:
         return *nvrtc_;
     }
 
+    std::shared_ptr<HostPanelPreparation> host_panels_;
     Form form_;
     int flags_ = 0;
     int scalar_bytes_ = 0;

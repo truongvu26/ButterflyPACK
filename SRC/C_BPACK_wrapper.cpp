@@ -1639,6 +1639,24 @@ void c_bpack_set_gpu_entry_source(F2Cptr* bmat, const char* source, const double
 #endif
 }
 
+extern "C" void c_bpack_gpu_finish_host_panels(void*,bpack_gpu_host_panel_stats*);
+void c_bpack_set_gpu_host_panels(F2Cptr* bmat,bpack_gpu_host_block_callback callback,void* user,
+                               const int* comm,const size_t* budget) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (!bmat || !*bmat || !comm || !budget) throw std::invalid_argument("Invalid host-panel registration");
+  void* h2=nullptr; c_bpack_get_h2(*bmat,&h2);
+  if (h2) throw std::invalid_argument("Collective host panels support HODLR, not H2");
+  bpack_set_gpu_evaluator(bmat,"host panels",[&](int scalar_bytes) {
+    return fmm::gpu::Evaluator::from_host_panels(callback,user,MPI_Comm_f2c(*comm),*budget,scalar_bytes);
+  });
+#endif
+}
+void c_bpack_finish_gpu_host_panels(F2Cptr* bmat,bpack_gpu_host_panel_stats* stats) {
+#ifdef BPACK_GPU_EVALUATORS
+  c_bpack_gpu_finish_host_panels(bpack_gpu_state(bmat,"finish host panels"),stats);
+#endif
+}
+
 void c_bpack_set_gpu_block_evaluator(F2Cptr* bmat, bpack_gpu_block_evaluator evaluate, void* user,
                                      const int* flags) {
 #ifdef BPACK_GPU_EVALUATORS
@@ -1669,6 +1687,22 @@ void c_bf_upload_entry_image(F2Cptr* matrix,const void* host,const size_t* bytes
 #ifdef BPACK_GPU_EVALUATORS
   void* gpu=nullptr; c_bf_get_gpu(*matrix,&gpu);
   c_bpack_gpu_upload_entry_image(gpu,host,bytes,device);
+#endif
+}
+void c_bf_set_gpu_host_panels(F2Cptr* bf,bpack_gpu_host_block_callback callback,void* user,
+                            const int* comm,const size_t* budget,const int* column_base) {
+#ifdef BPACK_GPU_EVALUATORS
+  if (!bf || !*bf || !comm || !budget || !column_base) throw std::invalid_argument("Invalid BF host-panel registration");
+  void* gpu=nullptr; c_bf_get_gpu(*bf,&gpu);
+  if (!gpu) throw std::invalid_argument("Enable rectangular GPU before host panel registration");
+  using Data=typename butterfly::fmm_data<C_DT>::type;
+  auto evaluator=fmm::gpu::Evaluator::from_host_panels(callback,user,MPI_Comm_f2c(*comm),*budget,sizeof(Data),*column_base);
+  c_bpack_gpu_set_evaluator(gpu,&evaluator);
+#endif
+}
+void c_bf_finish_gpu_host_panels(F2Cptr* bf,bpack_gpu_host_panel_stats* stats) {
+#ifdef BPACK_GPU_EVALUATORS
+  void* gpu=nullptr; c_bf_get_gpu(*bf,&gpu); c_bpack_gpu_finish_host_panels(gpu,stats);
 #endif
 }
 void c_bf_set_gpu_block_evaluator(F2Cptr* bf,bpack_gpu_block_evaluator evaluate,void* user,const int* flags) {

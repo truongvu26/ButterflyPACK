@@ -77,6 +77,29 @@ typedef struct bpack_gpu_block_batch {
 
 typedef void (*bpack_gpu_block_evaluator)(const bpack_gpu_block_batch* batch, void* user);
 
+/* Opt-in HYBRID HODLR/level-zero BF construction. The library rendezvous on
+ * the supplied front communicator before each BACA entry phase, bounds each
+ * owner's host staging, invokes this existing-style collective host extraction
+ * callback, then uploads only the requested panels for GPU compression.
+ * IDs are one-based APPLICATION indices, not clustering slots. All ranks,
+ * including owners with no requests, enter the callback with identical metadata.
+ * GPU block callbacks above remain rank-local and must not perform collectives.
+ * The callback/user and communicator are borrowed until finish_host_panels. */
+typedef void (*bpack_gpu_host_block_callback)
+  (int*, int*, int*, int64_t*, int*, int*, void*, int*, int*, int*, int*, int*, void*);
+typedef struct bpack_gpu_host_panel_stats {
+    uint64_t calls, windows, upload_bytes, peak_staging_bytes;
+    double preparation_seconds, metadata_seconds, upload_seconds;
+} bpack_gpu_host_panel_stats;
+void d_c_bpack_set_gpu_host_panels(void**,bpack_gpu_host_block_callback,void*,const int*,const size_t*);
+void z_c_bpack_set_gpu_host_panels(void**,bpack_gpu_host_block_callback,void*,const int*,const size_t*);
+void d_c_bpack_finish_gpu_host_panels(void**,bpack_gpu_host_panel_stats*);
+void z_c_bpack_finish_gpu_host_panels(void**,bpack_gpu_host_panel_stats*);
+void d_c_bf_set_gpu_host_panels(void**,bpack_gpu_host_block_callback,void*,const int*,const size_t*,const int*);
+void z_c_bf_set_gpu_host_panels(void**,bpack_gpu_host_block_callback,void*,const int*,const size_t*,const int*);
+void d_c_bf_finish_gpu_host_panels(void**,bpack_gpu_host_panel_stats*);
+void z_c_bf_finish_gpu_host_panels(void**,bpack_gpu_host_panel_stats*);
+
 /* An entry-list evaluator: values[e] = K(rows[e], cols[e]) for e < count,
  * all three device arrays (values of the matrix's type), on `stream`. */
 typedef void (*bpack_gpu_list_evaluator)(int64_t count, const int64_t* rows, const int64_t* cols, void* values,

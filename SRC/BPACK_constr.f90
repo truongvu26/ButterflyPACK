@@ -2190,7 +2190,7 @@ contains
       integer level_c
       type(Hoption)::option
       type(proctree)::ptree
-      integer(c_int) :: ready
+      integer(c_int) :: ready, collective
 
 
       HODLR_gpu_construct_ok = .false.
@@ -2198,6 +2198,8 @@ contains
       if (.not. c_associated(ho_bf1%gpu)) return
       call c_bpack_hodlr_gpu_construct_ready(ho_bf1%gpu, ready)
       if (ready /= 1) return
+      call c_bpack_hodlr_gpu_collective_mode(ho_bf1%gpu, collective)
+      if (collective == 1 .and. level_c > ho_bf1%Maxlevel) return ! host leaves remain on the established path
       if (level_c <= ho_bf1%Maxlevel) then
          if (option%RecLR_leaf /= BACANOVER .and. option%RecLR_leaf /= BACA) return
          if (option%LR_BLK_NUM /= 1 .or. option%forwardN15flag /= 0) return
@@ -2270,6 +2272,7 @@ contains
       type(hodlr_gpu_blkptr), allocatable :: blks(:)
       integer, allocatable :: bidx(:), rnk(:)
       integer nb, b, ii, k, npass, nblkit, shared_ii, shared_pg, pgno, Maxgrp
+      integer(c_int) collective
       real(c_double) :: gout(6)
       real(kind=8) :: rtemp, thost, tcore, trec, tbook
 
@@ -2304,7 +2307,8 @@ contains
          call HODLR_gpu_construct_shared(ho_bf1, level_c, shared_ii, shared_pg, option, stats, msh, ker, ptree)
          return
       endif
-      if (nb == 0) return
+      call c_bpack_hodlr_gpu_collective_mode(ho_bf1%gpu, collective)
+      if (nb == 0 .and. collective == 0) return
       allocate (bidx(nb), blks(nb), rnk(nb))
       b = 0
       do ii = ho_bf1%levels(level_c)%Bidxs*2 - 1, ho_bf1%levels(level_c)%Bidxe*2
@@ -2465,7 +2469,7 @@ contains
       type(hodlr_gpu_blkptr), allocatable :: leaves(:)
       integer, allocatable :: up(:, :), vp(:, :), rnk(:), mpo(:, :), npo(:, :), pid(:, :)
       integer nleaf, rank, npass, nblkit, ierr, bpg, nextra, nbp
-      integer(c_int) :: uid, vid, bu, bv, rows_c, cols_c, stale_c
+      integer(c_int) :: uid, vid, bu, bv, rows_c, cols_c, stale_c, collective
       real(c_double) :: fmerge
       logical inblk, defer
       real(c_double) :: gout(6)
@@ -2488,6 +2492,9 @@ contains
       blk%pgno = bpg
       allocate (rnk(max(1, nleaf)), pid(3, max(1, nleaf)))
       pid = 0
+      call c_bpack_hodlr_gpu_collective_mode(gpu, collective)
+      call assert(collective == 0 .or. nextra < 0 .or. ptree%pgrp(cgno)%nproc == 1, &
+                  'Collective host panels do not support adaptive balanced-piece construction')
       if (nextra >= 0 .and. ptree%pgrp(cgno)%nproc > 1) then
          call HODLR_gpu_balanced_pieces(gpu, blk, cgno, nextra, leaves, nleaf, option, stats, msh, ptree, gout, pid)
       else
@@ -3210,10 +3217,11 @@ contains
       real(c_double) :: tol_c, uf_c
       integer(c_int) :: keep_c, idu, idv, rows_c, cols_c
       integer(c_int), allocatable :: idl(:)
-      integer nseed
+      integer nseed, collective, maximum_active, panel_ierr
       integer, allocatable :: seed_save(:), seed_b(:)
 
-      if (nb == 0) return
+      call c_bpack_hodlr_gpu_collective_mode(gpu, collective)
+      if (nb == 0 .and. collective == 0) return
       if (present(seeds)) then
          call random_seed(size=nseed)
          allocate (seed_save(nseed), seed_b(nseed))
@@ -3295,7 +3303,9 @@ contains
                nrl(nac) = cr
             endif
          enddo
-         if (nac > 0) then
+         maximum_active = nac
+         if (collective == 1) call MPI_ALLREDUCE(MPI_IN_PLACE, maximum_active, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, panel_ierr)
+         if (maximum_active > 0) then
             allocate (colsl(max(1, sum(ncl(1:nac)))), rowsl(max(1, sum(nrl(1:nac)))))
             coff(1) = 0
             jof(1) = 0
@@ -3382,7 +3392,9 @@ contains
             nac = nac + 1
             bl(nac) = b
          enddo
-         if (nac == 0) exit
+         maximum_active = nac
+         if (collective == 1) call MPI_ALLREDUCE(MPI_IN_PLACE, maximum_active, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, panel_ierr)
+         if (maximum_active == 0) exit
          npass = npass + 1
          nblkit = nblkit + nac
 

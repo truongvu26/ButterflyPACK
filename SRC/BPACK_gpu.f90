@@ -251,6 +251,11 @@ module BPACK_GPU
          integer(c_int) :: construct, evaluate
          real(c_double) :: seconds(2)
       end subroutine c_bpack_hodlr_gpu_warm_up
+      subroutine c_bpack_hodlr_gpu_collective_mode(gpu, enabled) bind(c, name="c_bpack_hodlr_gpu_collective_mode")
+         import :: c_ptr, c_int
+         type(c_ptr), value :: gpu
+         integer(c_int) :: enabled
+      end subroutine c_bpack_hodlr_gpu_collective_mode
       subroutine c_bpack_hodlr_gpu_construct_ready(gpu, ready) bind(c, name="c_bpack_hodlr_gpu_construct_ready")
          import :: c_ptr, c_int
          type(c_ptr), value :: gpu
