@@ -1,0 +1,69 @@
+{
+  "status": "PENDING_150_PROFILE",
+  "strumpack_branch": "feature/hodlr-gpu-host-panels",
+  "butterflypack_branch": "feature/gpu-host-panels",
+  "strumpack_revision": "8d908c56",
+  "butterflypack_revision": "dc3b0fc",
+  "focused_validation": {
+    "status": "PASS",
+    "job": "60412476",
+    "contract_tests": "real/complex N/T/C, moves, child-inclusive references, forced multi-window budgets, one/three RHS, 1/3/4 ranks and strict subcommunicators",
+    "sparse_cases": [
+      {
+        "case": "baseline",
+        "relative_error": 2.56913e-11,
+        "scaled_residual": 3.55975e-09,
+        "status": "PASS"
+      },
+      {
+        "case": "panels",
+        "relative_error": 8.26439e-12,
+        "scaled_residual": 3.35673e-10,
+        "status": "PASS"
+      },
+      {
+        "case": "panels_baca",
+        "relative_error": 4.67681e-11,
+        "scaled_residual": 7.85427e-09,
+        "status": "PASS"
+      }
+    ]
+  },
+  "earlier_attempt": {
+    "job": 60411461,
+    "status": "FAILED_CONFIGURATION_GUARD",
+    "reason": "Direct fixtures used verbose diagnostics; corrected to quiet before the successful rerun"
+  },
+  "jobs": {
+    "paired_current_and_panel_gpu": 60412989,
+    "panel_stage_profile": 60412991
+  },
+  "layout": {
+    "grid": 150,
+    "unknowns": 3375000,
+    "rhs": 3,
+    "nodes": 4,
+    "mpi_ranks": 32,
+    "gpus": 16,
+    "gpu_memory_gb": 40,
+    "ranks_per_gpu": 2,
+    "omp_threads": 1
+  },
+  "settings": {
+    "pool_fraction": 0.85,
+    "image_cap_bytes": 268435456,
+    "panel_staging_budget_per_rank": 67108864,
+    "relative_compression_tolerance": 1e-05,
+    "relative_solve_tolerance": 1e-10,
+    "butterfly_levels": 0
+  },
+  "manifest": "BPACK dc3b0fce207a055a754f3c3c45530405fbcf7f7b\nSTRUMPACK 8d908c5607a9d13748b9f1a6f9785d04173cac5c\nBaseline executable numerical source: 24c5b4ae\n1728db2f70dd8da2e7a526629eeb22a51ace245e786299158f17a184d6dbdc49  lib/libbutterflypack.so.5.0.0\ned69c6a4e8214826b820328e8a4fe820b22ecc1e3af133ff2172efda6bf8f237  baseline\n91a6a24acdd534c64a2aa03f646146a069f248e3ffedc9fe3480630f9ab7ab42  panels\n4571313c2d791ac637db99db409419250b819405016d86a4ffb266340c08d4ef  diagnostic\n",
+  "limitations": [
+    "Host callbacks still assemble original entries and child/current Schur contributions; this is GPU compression with host-prepared panels.",
+    "Dense leaves use the existing host path.",
+    "OMP_NUM_THREADS=1, butterfly level zero, no adaptive balanced-piece schedule, and native entry diagnostics disabled.",
+    "GPU block callbacks remain rank-local; collective host preparation is a separate opt-in form.",
+    "The 150-cubed performance comparison is one paired trial, not a repeated benchmark."
+  ],
+  "configure_old_dependency": "EXPECTED_REJECTION: GPU interface and rectangular API found, collective host-panel symbols missing"
+}

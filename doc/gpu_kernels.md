@@ -320,3 +320,43 @@ the application's kernel: wrong parameters, ids off by one, rows and columns
 swapped, or coordinates read without `BPACK_GPU_COORDINATES`.
 `BPACK_CHECK=hodlr` compares every block of a HODLR GPU construction with
 the CPU's.
+
+## Hybrid HODLR/BF construction from bounded host panels
+
+The experimental `feature/gpu-host-panels` interface also accepts a
+`bpack_gpu_host_block_callback` for HODLR and standalone level-zero BF
+construction. Register it with `d_c_bpack_set_gpu_host_panels` (or `z_`, or
+`*_c_bf_set_gpu_host_panels`) after construction initialization and before
+entry construction. Supply the front's Fortran MPI communicator and a host
+staging byte limit. BF registration additionally supplies the merged-tree
+column base, normally its row count.
+
+This is a collective **host preparation** form. Native BACA keeps all front
+ranks in matching column/row/KNN entry phases, including ranks with no active
+requests. Each phase splits requests into bounded owner-local windows and
+all-gathers metadata. The callback sees identical one-based application-id
+metadata on every front rank, with `pmaps` describing one-by-one grids at
+owner ranks. `Nalldat_loc` and the values buffer contain only that rank's
+owned entries, packed in request order, matching the existing batched CPU
+extraction convention. The backend uploads those values directly to BACA
+panels and performs compression/recompression on the GPU. It does not
+replicate the full matrix image. CUDA stream completion protects host
+staging reuse. Ordinary GPU block/list callbacks retain their rank-local
+contract and must not add MPI collectives.
+
+Applications must assemble the complete entries, including child and current
+Schur contributions when evaluating frontal matrices. This interface does
+not assemble those contributions on the device. Dense HODLR leaves retain
+the host construction path. Current support requires one OpenMP thread,
+BACA variants 4/5, butterfly level zero, default nonadaptive piece splitting
+and native entry diagnostics disabled (`BPACK_CHECK` empty). H2 registration
+is rejected.
+
+Call `*_finish_gpu_host_panels` before destroying the callback's user state
+or communicator. It fences outstanding reads, clears the borrowed callback
+and returns `bpack_gpu_host_panel_stats`: collective phase calls, windows,
+local upload bytes, peak host values staged, and host wall seconds spent
+in preparation, metadata exchange and uploads. Matrix-specific factors stay
+resident; the shared cuSOLVER resource and process-tree ownership are
+unchanged. The staging limit excludes compressed factors, native workspaces
+and request metadata.
