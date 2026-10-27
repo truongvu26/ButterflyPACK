@@ -56,6 +56,23 @@ MPI rank or several ranks sharing one GPU.
   switches `HODLR_use_gpu` off after the construction). `BPACK_CHECK=hodlr`
   and `ErrFillFull=1` download the host copies during the construction.
 
+## cuSOLVER resource ownership
+
+The HODLR construction, dense SVD and distributed QR lease a single
+cuSOLVER handle and default parameter object on the process-local CUDA
+queue. These resources live until process exit, like the MAGMA queue;
+destroying a matrix releases its own data but does not destroy another
+matrix's cuSOLVER resource. Host use is serialized through each complete
+workspace-query/execution sequence, and device work stays ordered on the
+existing stream without additional synchronization. This does not lift
+the backend's current restriction on concurrent OpenMP construction.
+
+This bounds allocations outside the device pool when many frontal matrices
+remain alive. The regression target `hodlr_gpu_solver_resource_reuse`
+keeps 130 real/complex construction states alive per rank, checks external
+memory growth, and reuses surviving states after other states are destroyed.
+Run it with two ranks sharing each GPU and the default pool fraction.
+
 ## Environment variables
 
 [`doc/environment_variables.md`](../doc/environment_variables.md) describes
