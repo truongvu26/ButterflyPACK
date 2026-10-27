@@ -2395,9 +2395,66 @@ contains
    !> estimated cost, HODLR_gpu_balanced_pieces), merged up the split tree
    !> (HODLR_gpu_hmerge), and moved into the block's layout over its group
    subroutine HODLR_gpu_construct_shared(ho_bf1, level_c, ii, cgno, option, stats, msh, ker, ptree)
+      type(hobf), target :: ho_bf1
+      integer level_c, ii, cgno
+      type(Hoption) :: option
+      type(Hstat) :: stats
+      type(mesh) :: msh
+      type(kernelquant) :: ker
+      type(proctree) :: ptree
+      call GPU_construct_shared_block(ho_bf1%gpu, ho_bf1%levels(level_c)%BP(ii), level_c, cgno, option, stats, msh, ker, ptree)
+   end subroutine HODLR_gpu_construct_shared
+
+   ! Standalone rectangular low-rank block: reuse the HODLR split/BACA/TSQR
+   ! implementation. Keep valid host mirrors for the existing BF extraction.
+   subroutine BF_gpu_construct(blocks, option, stats, msh, ker, ptree)
+      use iso_c_binding, only: c_loc, c_f_pointer
       implicit none
-      type(hobf), target::ho_bf1
-      integer level_c, ii
+      type(matrixblock), target :: blocks
+      type(Hoption) :: option, build_option
+      type(Hstat) :: stats
+      type(mesh) :: msh
+      type(kernelquant) :: ker
+      type(proctree) :: ptree
+      type(blockplus) :: bp
+      type(onelplus), target :: ll(1)
+      type(matrixblock), pointer :: view(:)
+      integer(c_int64_t), allocatable :: ids(:)
+      real(c_double) :: xyz(1,1)
+      integer(c_int64_t) :: n
+      integer(c_int) :: dim, m, nc, k, comm
+      integer i
+      ! Actual merged-tree slot ids, not a second permutation: callbacks on
+      ! rectangular handles receive row slots 0..M-1, column slots M..M+N-1.
+      n=msh%Nunk; dim=0; xyz=0
+      allocate(ids(n))
+      do i=1,int(n)
+         ids(i)=i-1
+      enddo
+      call c_bpack_hodlr_gpu_set_points(blocks%standalone_gpu,n,dim,xyz,ids)
+      deallocate(ids)
+      call c_f_pointer(c_loc(blocks),view,(/1/))
+      ll(1)%matrices_block => view
+      bp%Lplus=1; bp%LL=>ll
+      build_option=option
+      build_option%ErrFillFull=0 ! standalone BF uses the explicit mirror policy
+      ! Avoid the full-entry diagnostic; the mirror policy is independent.
+      build_option%verbosity=-1
+      call GPU_construct_shared_block(blocks%standalone_gpu,bp,0,blocks%pgno,build_option,stats,msh,ker,ptree)
+      nullify(ll(1)%matrices_block,bp%LL,view)
+      m=blocks%M_loc; nc=blocks%N_loc; k=blocks%rankmax
+      comm=ptree%pgrp(blocks%pgno)%Comm
+      call c_bpack_bf_gpu_upload(blocks%standalone_gpu,m,nc,k, &
+          c_loc(blocks%ButterflyU%blocks(1)%matrix(1,1)), &
+          c_loc(blocks%ButterflyV%blocks(1)%matrix(1,1)),comm)
+   end subroutine BF_gpu_construct
+
+   subroutine GPU_construct_shared_block(gpu, bplus, level_c, cgno, option, stats, msh, ker, ptree)
+      implicit none
+      type(c_ptr) :: gpu
+      type(blockplus), target :: bplus
+      integer :: level_c
+      integer, parameter :: ii=1
       type(Hoption)::option
       type(Hstat)::stats
       type(mesh)::msh
@@ -2417,8 +2474,8 @@ contains
       t0 = MPI_Wtime()
       hodlr_gpu_merge_time = 0
       hodlr_gpu_tsqr_time = 0
-      blk => ho_bf1%levels(level_c)%BP(ii)%LL(1)%matrices_block(1)
-      call assert(ho_bf1%levels(level_c)%BP(ii)%Lplus == 1, 'HODLR GPU construction requires LRlevel=0')
+      blk => bplus%LL(1)%matrices_block(1)
+      call assert(bplus%Lplus == 1, 'HODLR GPU construction requires LRlevel=0')
       bpg = blk%pgno
       inblk = IOwnPgrp(ptree, bpg)
       nextra = -1
@@ -2432,9 +2489,9 @@ contains
       allocate (rnk(max(1, nleaf)), pid(3, max(1, nleaf)))
       pid = 0
       if (nextra >= 0 .and. ptree%pgrp(cgno)%nproc > 1) then
-         call HODLR_gpu_balanced_pieces(ho_bf1%gpu, blk, cgno, nextra, leaves, nleaf, option, stats, msh, ptree, gout, pid)
+         call HODLR_gpu_balanced_pieces(gpu, blk, cgno, nextra, leaves, nleaf, option, stats, msh, ptree, gout, pid)
       else
-         call HODLR_gpu_baca_blocks(ho_bf1%gpu, leaves, nleaf, option, stats, msh, ptree, rnk, gout, thost, tcore, trec, &
+         call HODLR_gpu_baca_blocks(gpu, leaves, nleaf, option, stats, msh, ptree, rnk, gout, thost, tcore, trec, &
                                     npass, nblkit, dids=pid)
       endif
       tb = MPI_Wtime()
@@ -2442,7 +2499,7 @@ contains
       tp(2) = -(tb - t0)
       call MPI_ALLREDUCE(MPI_IN_PLACE, tp, 2, MPI_DOUBLE_PRECISION, MPI_MAX, ptree%pgrp(cgno)%Comm, ierr)
       tb = MPI_Wtime()
-      call HODLR_gpu_hmerge(ho_bf1%gpu, blk, cgno, 0, option, ptree, leaves, nleaf, pid, uid, vid, up, vp, rank)
+      call HODLR_gpu_hmerge(gpu, blk, cgno, 0, option, ptree, leaves, nleaf, pid, uid, vid, up, vp, rank)
       tmg = MPI_Wtime()
       ! into the block's layout (M_p, N_p over its group, known on the ranks of cgno)
       nbp = ptree%pgrp(bpg)%nproc
@@ -2461,7 +2518,7 @@ contains
          npo = blk%N_p
       endif
       ! (on the device, then this rank's rows to the host, unless the host copies are deferred)
-      defer = HODLR_gpu_defer_host(option)
+      defer = HODLR_gpu_defer_host(option) .and. level_c /= 0
       stale_c = 0
       if (defer) stale_c = 1
       bu = 0
@@ -2474,36 +2531,36 @@ contains
          if (.not. defer .or. blk%N_loc == 0) blk%ButterflyV%blocks(1)%matrix = 0
          rows_c = blk%M_loc
          cols_c = rank
-         call c_bpack_gpu_dm_alloc(ho_bf1%gpu, rows_c, cols_c, c_null_ptr, bu)
+         call c_bpack_gpu_dm_alloc(gpu, rows_c, cols_c, c_null_ptr, bu)
          rows_c = blk%N_loc
-         call c_bpack_gpu_dm_alloc(ho_bf1%gpu, rows_c, cols_c, c_null_ptr, bv)
+         call c_bpack_gpu_dm_alloc(gpu, rows_c, cols_c, c_null_ptr, bv)
       endif
-      call HODLR_gpu_dm_redist(ho_bf1%gpu, uid, up, cgno, bu, 0, mpo, bpg, rank, ptree)
-      call HODLR_gpu_dm_redist(ho_bf1%gpu, vid, vp, cgno, bv, 0, npo, bpg, rank, ptree)
-      call c_bpack_gpu_dm_free(ho_bf1%gpu, uid)
-      call c_bpack_gpu_dm_free(ho_bf1%gpu, vid)
+      call HODLR_gpu_dm_redist(gpu, uid, up, cgno, bu, 0, mpo, bpg, rank, ptree)
+      call HODLR_gpu_dm_redist(gpu, vid, vp, cgno, bv, 0, npo, bpg, rank, ptree)
+      call c_bpack_gpu_dm_free(gpu, uid)
+      call c_bpack_gpu_dm_free(gpu, vid)
       if (inblk) then
          if (.not. defer) then
-            if (blk%M_loc > 0) call c_bpack_gpu_dm_download(ho_bf1%gpu, bu, c_loc(blk%ButterflyU%blocks(1)%matrix(1, 1)))
-            if (blk%N_loc > 0) call c_bpack_gpu_dm_download(ho_bf1%gpu, bv, c_loc(blk%ButterflyV%blocks(1)%matrix(1, 1)))
+            if (blk%M_loc > 0) call c_bpack_gpu_dm_download(gpu, bu, c_loc(blk%ButterflyU%blocks(1)%matrix(1, 1)))
+            if (blk%N_loc > 0) call c_bpack_gpu_dm_download(gpu, bv, c_loc(blk%ButterflyV%blocks(1)%matrix(1, 1)))
          endif
          ! (U and V stay on the device for HODLR_gpu_upload_forward, which moves V to its column child's layout)
          if (blk%M_loc > 0) then
-            call c_bpack_gpu_dm_keep(ho_bf1%gpu, bu, c_loc(blk%ButterflyU%blocks(1)%matrix(1, 1)), stale_c)
+            call c_bpack_gpu_dm_keep(gpu, bu, c_loc(blk%ButterflyU%blocks(1)%matrix(1, 1)), stale_c)
          else
-            call c_bpack_gpu_dm_free(ho_bf1%gpu, bu)
+            call c_bpack_gpu_dm_free(gpu, bu)
          endif
          if (blk%N_loc > 0) then
-            call c_bpack_gpu_dm_keep(ho_bf1%gpu, bv, c_loc(blk%ButterflyV%blocks(1)%matrix(1, 1)), stale_c)
+            call c_bpack_gpu_dm_keep(gpu, bv, c_loc(blk%ButterflyV%blocks(1)%matrix(1, 1)), stale_c)
          else
-            call c_bpack_gpu_dm_free(ho_bf1%gpu, bv)
+            call c_bpack_gpu_dm_free(gpu, bv)
          endif
       endif
       deallocate (up, vp, leaves, rnk, pid, mpo, npo)
       ! (the flops of the merges: TSQR and the products of the other side)
-      call c_bpack_gpu_dm_flops(ho_bf1%gpu, fmerge)
+      call c_bpack_gpu_dm_flops(gpu, fmerge)
       stats%Flop_Fill = stats%Flop_Fill + fmerge
-      if (inblk) call HODLR_gpu_block_bookkeeping(ho_bf1%levels(level_c)%BP(ii), blk, rank, option, stats, msh, ker, ptree)
+      if (inblk) call HODLR_gpu_block_bookkeeping(bplus, blk, rank, option, stats, msh, ker, ptree)
       t1 = MPI_Wtime()
       if (ptree%MyID == ptree%pgrp(cgno)%head .and. option%verbosity >= 1) then
          write (*, '(A,I3,A,I5,A,I3,A,I6,A,F9.3,A,2F8.3,A,F8.3,A,F8.3,A)') ' HODLR GPU construction level', level_c, &
@@ -2512,7 +2569,7 @@ contains
          write (*, '(A,3F8.3,A,5F8.3)') '    merges: redistribute, TSQR, other side', hodlr_gpu_merge_time, &
             '; TSQR: local QR, up, root SVD, down, apply', hodlr_gpu_tsqr_time
       endif
-   end subroutine HODLR_gpu_construct_shared
+   end subroutine GPU_construct_shared_block
 
    !> The split of a block among the ranks of group pgno as in
    !> LR_HBACA_Leaflevel (LR_BLK_NUM=1), alternating row and column cuts in

@@ -9,6 +9,7 @@
 #include "h2_gpu/evaluator.hpp"
 #include "hodlr_construct.hpp"
 #include "hodlr_device.hpp"
+#include "rectangular_device.hpp"
 #include "hodlr_distqr.hpp"
 #include "hodlr_svd.hpp"
 #include "hodlr_sym.hpp"
@@ -77,10 +78,27 @@ double warm_up_hodlr_kernels() {
 
 template<typename T>
 struct GpuState {
+    // Bounded application entry image leases. Owned by this matrix and drawn
+    // from the same resident heap as its factors, rather than a second pool.
+    std::vector<void*> entry_images;
+    ~GpuState() {
+        auto& ctx=Context::instance(); ctx.activate();
+        check_cuda(cudaStreamSynchronize(ctx.stream()),"entry image release");
+        for (auto* p:entry_images) DeviceHeap::instance().free(p);
+    }
+    void* upload_entry_image(const void* host,size_t bytes) {
+        auto& ctx=Context::instance(); ctx.activate();
+        void* p=DeviceHeap::instance().alloc_resident<char>(std::max<size_t>(bytes,1));
+        if (bytes) check_cuda(cudaMemcpyAsync(p,host,bytes,cudaMemcpyHostToDevice,ctx.stream()),"entry image upload");
+        check_cuda(cudaStreamSynchronize(ctx.stream()),"entry image ready");
+        entry_images.push_back(p); return p;
+    }
+
     // the application's evaluator of the entries (c_bpack_set_gpu_*_evaluator,
     // GPU_INTERFACE/bpack_gpu.h); null: none (the entries come from the host)
     std::shared_ptr<fmm::gpu::Evaluator> evaluator;
     std::unique_ptr<HodlrDevice<T>> hodlr;
+    std::unique_ptr<RectangularDevice<T>> rectangular;
     std::unique_ptr<HodlrSymFactor<T>> sym;      // after a symmetric factorization
     std::unique_ptr<HodlrUnsymFactor<T>> unsym;  // after an unsymmetric factorization
     std::unique_ptr<HodlrConstruct<T>> construct;  // HODLR construction (points, BACA of a level)

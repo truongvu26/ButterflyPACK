@@ -46,6 +46,19 @@ module BPACK_GPU
          type(c_ptr), value :: gpu
       end subroutine c_bpack_gpu_delete
 
+      subroutine c_bpack_bf_gpu_upload(gpu,m,n,k,u,v,comm) bind(c,name="c_bpack_bf_gpu_upload")
+         import
+         type(c_ptr), value :: gpu,u,v
+         integer(c_int) :: m,n,k,comm
+      end subroutine c_bpack_bf_gpu_upload
+      subroutine c_bpack_bf_gpu_mult(gpu,trans,nrhs,x,y,mode,flops) bind(c,name="c_bpack_bf_gpu_mult")
+         import
+         type(c_ptr), value :: gpu
+         character(c_char) :: trans
+         integer(c_int) :: nrhs,mode
+         DT :: x(*),y(*)
+         real(c_double) :: flops
+      end subroutine c_bpack_bf_gpu_mult
       subroutine c_bpack_hodlr_gpu_reset(gpu, n_loc, maxlevel) bind(c, name="c_bpack_hodlr_gpu_reset")
          import :: c_ptr, c_int, c_int64_t
          type(c_ptr), value :: gpu

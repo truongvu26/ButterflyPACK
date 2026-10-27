@@ -477,6 +477,7 @@ integer, allocatable::index_MD(:, :, :) !< an array of block offsets
 
     !>**** butterfly or LR structure
     type matrixblock
+        type(c_ptr) :: standalone_gpu = c_null_ptr !< owned only by a standalone C BF handle
         integer pgno !< process group
         integer pgno_db !< process group when MPI count is doubled
         integer level !< level in BPACK

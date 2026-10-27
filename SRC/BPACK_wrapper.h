@@ -18,6 +18,7 @@ Developers:Yang Liu
 #ifndef BPACK_WRAP /* allow multiple inclusions */
 #define BPACK_WRAP
 #include <stdint.h>
+#include <stddef.h>
 #include "bpack_gpu.h" /* the GPU evaluators of the entries (GPU_INTERFACE) */
 #ifdef HAVE_MPI
 #include <mpi.h>
@@ -163,6 +164,17 @@ void c_bf_mult(char const * trans, C_DT const * xin, C_DT* xout, int* Ninloc, in
 void c_bf_new2old_row(F2Cptr* mshr, int* newidx_loc, int* oldidx);
 void c_bf_new2old_col(F2Cptr* mshc, int* newidx_loc, int* oldidx);
 
+
+void c_bpack_gpu_upload_entry_image(void*,const void*,const size_t*,void**);
+void c_bpack_upload_entry_image(F2Cptr*,const void*,const size_t*,void**);
+void c_bf_upload_entry_image(F2Cptr*,const void*,const size_t*,void**);
+void c_bf_enable_gpu(F2Cptr* bf, const int* mode);
+void c_bf_get_gpu(F2Cptr bf, void** gpu);
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
+void c_bf_gpu_schur_mult(F2Cptr* f12,F2Cptr* f11,F2Cptr* f21,const char* op,const int* nrhs,const void* x,void* y,const int* mode);
+void c_bpack_gpu_schur_product(void*,void*,void*,const char*,const int*,const void*,void*,const int*);
+void c_bpack_bf_gpu_upload(void*,const int*,const int*,const int*,const void*,const void*,const MPI_Fint*);
+void c_bpack_bf_gpu_mult(void*,const char*,const int*,const void*,void*,const int*,double*);
 
 #ifdef __cplusplus
 }

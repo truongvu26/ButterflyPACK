@@ -110,6 +110,73 @@ void c_bpack_gpu_set_evaluator(void* gpu, const void* evaluator) {
 #endif
 }
 
+
+void c_bpack_gpu_upload_entry_image(void* gpu,const void* host,const size_t* bytes,void** device) {
+#ifdef BPACK_GPU_ENABLED
+  try { *device=state_of(gpu,"entry image")->upload_entry_image(host,*bytes); }
+  catch(const std::exception& e) { gpu_fail("entry image",e.what()); }
+#else
+  gpu_fail("entry image","no GPU backend");
+#endif
+}
+void c_bpack_bf_gpu_upload(void* gpu,const int* m,const int* n,const int* k,const void* u,const void* v,const MPI_Fint* comm) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    auto* st=state_of(gpu,"BF GPU upload");
+    st->rectangular=std::make_unique<bpack::gpu::RectangularDevice<Scalar>>();
+    st->rectangular->upload(*m,*n,*k,static_cast<const Scalar*>(u),static_cast<const Scalar*>(v),MPI_Comm_f2c(*comm));
+  } catch(const std::exception& e) { gpu_fail("BF GPU upload",e.what()); }
+#else
+  gpu_fail("BF GPU upload","no GPU backend");
+#endif
+}
+void c_bpack_bf_gpu_mult(void* gpu,const char* op,const int* nrhs,const void* x,void* y,const int* mode,double* flops) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    auto* st=state_of(gpu,"BF GPU mult");
+    if (!st->rectangular) throw std::logic_error("rectangular factors not uploaded");
+    *flops=st->rectangular->mult(*op,*nrhs,static_cast<const Scalar*>(x),static_cast<Scalar*>(y),*mode);
+  } catch(const std::exception& e) { gpu_fail("BF GPU mult",e.what()); }
+#else
+  gpu_fail("BF GPU mult","no GPU backend");
+#endif
+}
+// F21 inv(F11) F12 and its transpose, with host API boundaries only.
+// Intermediate vectors belong to the backend heap and never go through host
+// arrays. MPI coefficient reductions may still use explicit host staging.
+void c_bpack_gpu_schur_product(void* left,void* diagonal,void* right,const char* op,const int* nrhs,
+                               const void* x,void* y,const int* mode) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    if (*op!='N' && *op!='T') throw std::invalid_argument("device Schur product supports N/T");
+    auto* st1=state_of(left,"Schur left"); auto* st2=state_of(right,"Schur right");
+    auto* diag=state_of(diagonal,"Schur diagonal");
+    if (!st1->rectangular || !st2->rectangular || !diag->unsym || !diag->unsym->ready())
+      throw std::logic_error("Schur factors are not ready");
+    auto& a=*(*op=='N'?st1->rectangular:st2->rectangular);
+    auto& z=*(*op=='N'?st2->rectangular:st1->rectangular);
+    const int ni=*op=='N'?a.cols():a.rows(), middle=*op=='N'?a.rows():a.cols();
+    const int no=*op=='N'?z.rows():z.cols();
+    auto& ctx=fmm::gpu::Context::instance(); ctx.activate();
+    auto& heap=fmm::gpu::DeviceHeap::instance();
+    const size_t ib=static_cast<size_t>(ni)*(*nrhs)*sizeof(Scalar), ob=static_cast<size_t>(no)*(*nrhs)*sizeof(Scalar);
+    const size_t mb=static_cast<size_t>(middle)*(*nrhs)*sizeof(Scalar);
+    Scalar* dx=heap.alloc<Scalar>(std::max<size_t>(ib,sizeof(Scalar)));
+    Scalar* p=heap.alloc<Scalar>(std::max<size_t>(mb,sizeof(Scalar)));
+    Scalar* q=heap.alloc<Scalar>(std::max<size_t>(mb,sizeof(Scalar)));
+    Scalar* dy=heap.alloc<Scalar>(std::max<size_t>(ob,sizeof(Scalar)));
+    if (ib) fmm::gpu::check_cuda(cudaMemcpyAsync(dx,x,ib,cudaMemcpyHostToDevice,ctx.stream()),"Schur input");
+    a.mult(*op,*nrhs,dx,p,*mode,true);
+    diag->unsym->solve(*op,*nrhs,p,q,true);
+    z.mult(*op,*nrhs,q,dy,*mode,true);
+    if (ob) fmm::gpu::check_cuda(cudaMemcpyAsync(y,dy,ob,cudaMemcpyDeviceToHost,ctx.stream()),"Schur output");
+    fmm::gpu::check_cuda(cudaStreamSynchronize(ctx.stream()),"Schur completion");
+    heap.free(dy); heap.free(q); heap.free(p); heap.free(dx);
+  } catch(const std::exception& e) { gpu_fail("device Schur product",e.what()); }
+#else
+  gpu_fail("device Schur product","no GPU backend");
+#endif
+}
 // ---- HODLR (hodlr_gpu/hodlr_device.hpp); rows are local and 0-based ----
 
 void c_bpack_hodlr_gpu_reset(void* gpu, const int64_t* n_loc, const int* maxlevel) {

@@ -1656,6 +1656,38 @@ void c_bpack_set_gpu_block_evaluator(F2Cptr* bmat, bpack_gpu_block_evaluator eva
 #endif
 }
 
+
+extern "C" void c_bf_get_gpu(F2Cptr bf,void** gpu);
+extern "C" void c_bpack_gpu_schur_product(void*,void*,void*,const char*,const int*,const void*,void*,const int*);
+void c_bpack_upload_entry_image(F2Cptr* matrix,const void* host,const size_t* bytes,void** device) {
+#ifdef BPACK_GPU_EVALUATORS
+  void* gpu=bpack_gpu_state(matrix,"entry image");
+  c_bpack_gpu_upload_entry_image(gpu,host,bytes,device);
+#endif
+}
+void c_bf_upload_entry_image(F2Cptr* matrix,const void* host,const size_t* bytes,void** device) {
+#ifdef BPACK_GPU_EVALUATORS
+  void* gpu=nullptr; c_bf_get_gpu(*matrix,&gpu);
+  c_bpack_gpu_upload_entry_image(gpu,host,bytes,device);
+#endif
+}
+void c_bf_set_gpu_block_evaluator(F2Cptr* bf,bpack_gpu_block_evaluator evaluate,void* user,const int* flags) {
+#ifdef BPACK_GPU_EVALUATORS
+  void* gpu=nullptr; c_bf_get_gpu(*bf,&gpu);
+  if (!gpu || !evaluate || !flags) throw std::invalid_argument("enable rectangular GPU before evaluator registration");
+  using Data=typename butterfly::fmm_data<C_DT>::type;
+  auto evaluator=fmm::gpu::Evaluator::from_block(evaluate,user,*flags,sizeof(Data));
+  c_bpack_gpu_set_evaluator(gpu,&evaluator);
+#endif
+}
+void c_bf_gpu_schur_mult(F2Cptr* f12,F2Cptr* f11,F2Cptr* f21,const char* op,const int* nrhs,
+                       const void* x,void* y,const int* mode) {
+#ifdef BPACK_GPU_EVALUATORS
+  void *a=nullptr,*d=nullptr,*z=nullptr;
+  c_bf_get_gpu(*f12,&a); c_bpack_get_gpu(*f11,&d); c_bf_get_gpu(*f21,&z);
+  c_bpack_gpu_schur_product(a,d,z,op,nrhs,x,y,mode);
+#endif
+}
 void c_bpack_set_gpu_list_evaluator(F2Cptr* bmat, bpack_gpu_list_evaluator evaluate, void* user,
                                     const int* flags) {
 #ifdef BPACK_GPU_EVALUATORS

@@ -83,6 +83,19 @@ typedef void (*bpack_gpu_list_evaluator)(int64_t count, const int64_t* rows, con
                                          void* stream, void* user);
 
 /* The registrations, per matrix type (d_: double, z_: double complex). */
+/* Standalone rectangular low-rank handles. Enable after BF construct_init.
+ * Evaluators receive merged tree slots: rows 0..M-1, columns M..M+N-1.
+ * Host BF extraction remains supported through retained host mirrors. */
+void d_c_bpack_upload_entry_image(void** matrix,const void* host,const size_t* bytes,void** device);
+void z_c_bpack_upload_entry_image(void** matrix,const void* host,const size_t* bytes,void** device);
+void d_c_bf_upload_entry_image(void** matrix,const void* host,const size_t* bytes,void** device);
+void z_c_bf_upload_entry_image(void** matrix,const void* host,const size_t* bytes,void** device);
+void d_c_bf_enable_gpu(void** bf,const int* mode);
+void z_c_bf_enable_gpu(void** bf,const int* mode);
+void d_c_bf_set_gpu_block_evaluator(void** bf,bpack_gpu_block_evaluator evaluate,void* user,const int* flags);
+void z_c_bf_set_gpu_block_evaluator(void** bf,bpack_gpu_block_evaluator evaluate,void* user,const int* flags);
+void d_c_bf_gpu_schur_mult(void** f12,void** f11,void** f21,const char* op,const int* nrhs,const void* x,void* y,const int* mode);
+void z_c_bf_gpu_schur_mult(void** f12,void** f11,void** f21,const char* op,const int* nrhs,const void* x,void* y,const int* mode);
 void d_c_bpack_set_gpu_block_evaluator(void** bmat, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
 void z_c_bpack_set_gpu_block_evaluator(void** bmat, bpack_gpu_block_evaluator evaluate, void* user, const int* flags);
 void d_c_bpack_set_gpu_list_evaluator(void** bmat, bpack_gpu_list_evaluator evaluate, void* user, const int* flags);

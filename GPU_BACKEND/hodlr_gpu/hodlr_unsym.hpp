@@ -161,7 +161,7 @@ public:
 
     // y = op(A)^{-1} x ('N' or 'T') for the local n_loc x nrhs host arrays x and y
     double solve_flops() const { return solve_flops_; }  // of the last solve()
-    void solve(char trans, int nrhs, const T* x, T* y) {
+    void solve(char trans, int nrhs, const T* x, T* y, bool device = false) {
         if (!ready_) throw std::logic_error("HODLR GPU: unsymmetric solve before the factorization");
         if (trans != 'N' && trans != 'T') throw std::invalid_argument("HODLR GPU: solve takes 'N' or 'T'");
         const double flops0 = stats_.flops;  // (the level applications count there; the factorization's count is kept)
@@ -173,7 +173,7 @@ public:
         DeviceHeap& heap = DeviceHeap::instance();
         T* dx = heap.alloc<T>(bytes);
         T* dy = heap.alloc<T>(bytes);
-        check_cuda(cudaMemcpyAsync(dx, x, bytes, cudaMemcpyHostToDevice, stream), "HODLR solve input");
+        check_cuda(cudaMemcpyAsync(dx, x, bytes, device ? cudaMemcpyDeviceToDevice : cudaMemcpyHostToDevice, stream), "HODLR solve input");
         const int ld = static_cast<int>(n_loc_);
         auto leaf_apply = [&](const T* in, T* out) {
             VBatch<T> b;
@@ -201,7 +201,7 @@ public:
             for (int l = 1; l <= maxlevel_; ++l) level_apply(l, dx);
             leaf_apply(dx, dy);
         }
-        check_cuda(cudaMemcpyAsync(y, result, bytes, cudaMemcpyDeviceToHost, stream), "HODLR solve output");
+        check_cuda(cudaMemcpyAsync(y, result, bytes, device ? cudaMemcpyDeviceToDevice : cudaMemcpyDeviceToHost, stream), "HODLR solve output");
         check_cuda(cudaStreamSynchronize(stream), "HODLR unsym solve");
         heap.free(dy);
         heap.free(dx);

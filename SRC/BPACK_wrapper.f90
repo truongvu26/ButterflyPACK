@@ -2844,6 +2844,7 @@ contains
       integer seed_myid(50)
       integer times(8)
       real(kind=8) t1, t2, error
+      integer(c_int) :: gm,gn,gk,gcomm
       integer ierr
 
       !>**** allocate BPACK solver structures
@@ -2871,6 +2872,12 @@ contains
 
       call BF_randomized(blocks%pgno, blocks%level_butterfly, option%rank0, option%rankrate, blocks, ker, Bmatvec_user_C, error, 'CMatVec', option, stats, ptree, msh)
 
+      if (c_associated(blocks%standalone_gpu)) then
+         gm=blocks%M_loc; gn=blocks%N_loc; gk=blocks%rankmax; gcomm=ptree%pgrp(blocks%pgno)%Comm
+         call c_bpack_bf_gpu_upload(blocks%standalone_gpu,gm,gn,gk, &
+             c_loc(blocks%ButterflyU%blocks(1)%matrix(1,1)), &
+             c_loc(blocks%ButterflyV%blocks(1)%matrix(1,1)),gcomm)
+      endif
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
       if (option%verbosity >= 2)call BF_print_size(blocks)
@@ -2941,6 +2948,7 @@ contains
       integer times(8)
       real(kind=8) t1, t2, error, Memory, tol_comp_tmp
       integer ierr,pp,knn_tmp
+      integer(c_int) :: gpu_ready, gm, gn, gk, gcomm
       integer:: boundary_map(1,1)
       integer groupm_start, Nboundall,Ninadmissible
 
@@ -2965,7 +2973,14 @@ contains
       groupm_start = 0
       Nboundall = 0
       Ninadmissible = 0
-      if (option%forwardN15flag == 1) then
+      gpu_ready=0
+      if (c_associated(blocks%standalone_gpu)) &
+          call c_bpack_hodlr_gpu_construct_ready(blocks%standalone_gpu,gpu_ready)
+      if (gpu_ready==1) then
+         call assert(option%RecLR_leaf==4 .or. option%RecLR_leaf==5, 'Rectangular GPU BACA requires lr_leaf 4/5')
+         call assert(option%forwardN15flag==0 .and. option%LR_BLK_NUM==1, 'Unsupported rectangular GPU BACA configuration')
+         call BF_gpu_construct(blocks,option,stats,msh,ker,ptree)
+      elseif (option%forwardN15flag == 1) then
          knn_tmp = option%knn
          option%knn=0
          call BF_compress_N15(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
@@ -2990,6 +3005,12 @@ contains
          call BF_compress_NlogN(blocks, boundary_map, Nboundall, Ninadmissible, groupm_start, option, Memory, stats, msh, ker, ptree, 1)
       end if
 
+      if (c_associated(blocks%standalone_gpu) .and. gpu_ready==0) then
+         gm=blocks%M_loc; gn=blocks%N_loc; gk=blocks%rankmax; gcomm=ptree%pgrp(blocks%pgno)%Comm
+         call c_bpack_bf_gpu_upload(blocks%standalone_gpu,gm,gn,gk, &
+             c_loc(blocks%ButterflyU%blocks(1)%matrix(1,1)), &
+             c_loc(blocks%ButterflyV%blocks(1)%matrix(1,1)),gcomm)
+      endif
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, option%verbosity)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
@@ -3979,6 +4000,8 @@ contains
       type(c_ptr), intent(in) :: stats_Cptr
       type(c_ptr), intent(in) :: option_Cptr
 
+      integer(c_int) :: gm,gn,nrhs,mode
+      real(c_double) :: gflops
       integer strlen
       character(len=:), allocatable :: str
       type(Hstat), pointer::stats
@@ -4045,6 +4068,15 @@ contains
       stats%Time_C_Mult_FFT_Multiply = 0
       stats%Time_C_Mult_FFT_Backward = 0
       stats%Time_C_Mult_FFT_Output = 0
+      if (c_associated(blocks%standalone_gpu)) then
+         gm=Ninloc; gn=Noutloc; nrhs=Ncol; mode=option%HODLR_use_gpu
+         call c_bpack_bf_gpu_mult(blocks%standalone_gpu,trans(1),nrhs,xin,xout,mode,gflops)
+         xout=xout/option%scale_factor
+         stats%Flop_C_Mult=gflops
+         stats%Time_C_Mult=MPI_Wtime()-t1
+         deallocate(str)
+         return
+      endif
       xout = 0
       if (trim(str) == 'N') then
          call BF_block_MVP_dat(blocks, trim(str), Noutloc, Ninloc, Ncol, xin, Ninloc, xout,Noutloc, BPACK_cone, BPACK_czero, ptree, stats)
@@ -4711,6 +4743,27 @@ contains
 
    end subroutine C_BPACK_Delete
 
+!> Standalone rectangular GPU capability, opt-in after construct_init.
+   subroutine C_BF_Enable_GPU(bf_Cptr, mode) bind(c, name="c_bf_enable_gpu")
+      type(c_ptr) :: bf_Cptr
+      integer(c_int) :: mode
+      type(matrixblock), pointer :: blocks
+      integer(c_int) :: available
+      call c_f_pointer(bf_Cptr,blocks)
+      call c_bpack_gpu_available(available)
+      call assert(available==1 .and. mode>0, 'Rectangular GPU backend unavailable')
+      call assert(blocks%level_butterfly==0, 'Rectangular GPU requires butterfly level zero')
+      if (.not. c_associated(blocks%standalone_gpu)) call c_bpack_gpu_create(blocks%standalone_gpu)
+   end subroutine C_BF_Enable_GPU
+
+   subroutine C_BF_Get_GPU(bf_Cptr, gpu) bind(c, name="c_bf_get_gpu")
+      type(c_ptr), value :: bf_Cptr
+      type(c_ptr) :: gpu
+      type(matrixblock), pointer :: blocks
+      call c_f_pointer(bf_Cptr,blocks)
+      gpu=blocks%standalone_gpu
+   end subroutine C_BF_Get_GPU
+
 !>**** C interface of deleting a BF
    !> @param bf_Cptr: the structure containing BF
    subroutine C_BF_DeleteBF(bf_Cptr) bind(c, name="c_bf_deletebf")
@@ -4719,6 +4772,8 @@ contains
       type(matrixblock), pointer::blocks
 
       call c_f_pointer(bf_Cptr, blocks)
+      if (c_associated(blocks%standalone_gpu)) call c_bpack_gpu_delete(blocks%standalone_gpu)
+      blocks%standalone_gpu=c_null_ptr
       call BF_delete(blocks, 1)
       deallocate (blocks)
       bf_Cptr = c_null_ptr
