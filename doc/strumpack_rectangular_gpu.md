@@ -7,7 +7,10 @@ TSQR and factor redistribution implementation. Set `HODLR_use_gpu` to 1 or 2 on 
 `[dz]_c_bf_enable_gpu` after `c_bf_construct_init`; optionally register a
 block evaluator before `c_bf_construct_element_compute`. Without an evaluator,
 CPU compression is retained and factors are uploaded for GPU multiplies.
-The normal BF API is unchanged unless explicitly activated.
+The normal BF API is unchanged unless explicitly activated. Initialize GPU
+memory sharing and exchange space on the full solver communicator before
+activation, as for HODLR; STRUMPACK performs that initialization before
+frontal traversal. Activation does not choose a new solver group or binding.
 
 The evaluator receives merged tree slots (rows `0..M-1`, columns
 `M..M+N-1`), rather than the application IDs of a square HODLR evaluator.

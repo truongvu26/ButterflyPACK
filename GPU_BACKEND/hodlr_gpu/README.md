@@ -85,3 +85,11 @@ The `feature/gpu-rectangular-schur` branch adds standalone level-zero BF GPU
 compression/multiplies and compound Schur applications with device
 intermediates. See [the integration record](../../doc/strumpack_rectangular_gpu.md)
 for activation, ownership, supported configurations and validation.
+
+## Standalone rectangular integration
+
+The opt-in level-zero BF adapter, device-resident N/T/C Schur pipeline and
+paired STRUMPACK validation are described in
+[the rectangular integration note](../../doc/strumpack_rectangular_gpu.md).
+Distributed entry images in that integration are bounded and host-prepared;
+they are not an unbounded device tile service.
