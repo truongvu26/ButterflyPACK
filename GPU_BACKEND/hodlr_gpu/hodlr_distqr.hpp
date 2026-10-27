@@ -47,8 +47,6 @@ public:
         for (auto& kv : mats_) {
             if (kv.second.owned) fmm::gpu::DeviceHeap::instance().free(kv.second.d);
         }
-        if (params_ != nullptr) cusolverDnDestroyParams(params_);
-        if (handle_ != nullptr) cusolverDnDestroy(handle_);
     }
 
     // TSQR of X (r columns) whose rows are spread over the ranks of comm, x
@@ -581,17 +579,6 @@ private:
         }
     }
 
-    cusolverDnHandle_t solver() {
-        fmm::gpu::Context& ctx = fmm::gpu::Context::instance();
-        ctx.activate();
-        if (handle_ == nullptr) {
-            check(cusolverDnCreate(&handle_), "cusolverDnCreate");
-            check(cusolverDnCreateParams(&params_), "cusolverDnCreateParams");
-        }
-        check(cusolverDnSetStream(handle_, ctx.stream()), "cusolverDnSetStream");
-        return handle_;
-    }
-
     void release(Factor& f) {
         fmm::gpu::DeviceHeap& heap = fmm::gpu::DeviceHeap::instance();
         if (f.a != nullptr && f.owned) heap.free(f.a);
@@ -627,17 +614,18 @@ private:
             const double k = std::min(f.m, f.n), mx = std::max(f.m, f.n);
             flops_ += kFlopScale * (2.0 * mx * k * k - 2.0 / 3.0 * k * k * k);
         }
-        cusolverDnHandle_t h = solver();
+        CuSolverLease solver;
+        const auto h = solver.handle();
         const cudaStream_t stream = fmm::gpu::Context::instance().stream();
         fmm::gpu::DeviceHeap& heap = fmm::gpu::DeviceHeap::instance();
         const cudaDataType type = fmm::gpu::is_complex_scalar<T> ? CUDA_C_64F : CUDA_R_64F;
         size_t dbytes = 0, hbytes = 0;
-        check(cusolverDnXgeqrf_bufferSize(h, params_, f.m, f.n, type, f.a, f.m, type, f.tau, type, &dbytes, &hbytes),
+        check(cusolverDnXgeqrf_bufferSize(h, solver.params(), f.m, f.n, type, f.a, f.m, type, f.tau, type, &dbytes, &hbytes),
               "cusolverDnXgeqrf_bufferSize");
         const size_t wbytes = fmm::gpu::align_up(std::max<size_t>(dbytes, 1));
         char* work = heap.alloc<char>(wbytes + sizeof(int));
         std::vector<char> hwork(std::max<size_t>(hbytes, 1));
-        check(cusolverDnXgeqrf(h, params_, f.m, f.n, type, f.a, f.m, type, f.tau, type, work, dbytes, hwork.data(), hbytes,
+        check(cusolverDnXgeqrf(h, solver.params(), f.m, f.n, type, f.a, f.m, type, f.tau, type, work, dbytes, hwork.data(), hbytes,
                                reinterpret_cast<int*>(work + wbytes)),
               "cusolverDnXgeqrf");
         fmm::gpu::check_cuda(cudaStreamSynchronize(stream), "TSQR factor");
@@ -651,7 +639,8 @@ private:
             const double k = std::min(f.m, f.n);
             flops_ += kFlopScale * (4.0 * f.m * k * rn - 2.0 * k * k * rn);
         }
-        cusolverDnHandle_t h = solver();
+        CuSolverLease solver;
+        const auto h = solver.handle();
         const cudaStream_t stream = fmm::gpu::Context::instance().stream();
         fmm::gpu::DeviceHeap& heap = fmm::gpu::DeviceHeap::instance();
         const int k = std::min(f.m, f.n);
@@ -689,8 +678,6 @@ private:
         return c;
     }
 
-    cusolverDnHandle_t handle_ = nullptr;
-    cusolverDnParams_t params_ = nullptr;
     std::vector<Factor> tree_;  // the stacked pairs' factors up the tree, the last on top
     T* xnew_ = nullptr;         // tsqr's result: this rank's rows of the left singular vectors (l_ x rn_)
     std::vector<T> sw_;         // tsqr's result: diag(s) Vs^H (rn_ x r_)

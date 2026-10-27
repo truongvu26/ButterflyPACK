@@ -68,8 +68,6 @@ public:
     ~HodlrConstruct() {
         end();
         release_points();
-        if (solver_params_ != nullptr) cusolverDnDestroyParams(solver_params_);
-        if (solver_ != nullptr) cusolverDnDestroy(solver_);
     }
 
     const Stats& stats() const { return stats_; }
@@ -1521,23 +1519,17 @@ private:
                 throw std::runtime_error(std::string(what) + " failed with status " + std::to_string(static_cast<int>(st)));
             }
         };
-        Context& ctx = Context::instance();
-        const cudaStream_t stream = ctx.stream();
-        if (solver_ == nullptr) {
-            check(cusolverDnCreate(&solver_), "cusolverDnCreate");
-            check(cusolverDnCreateParams(&solver_params_), "cusolverDnCreateParams");
-        }
-        check(cusolverDnSetStream(solver_, stream), "cusolverDnSetStream");
+        CuSolverLease solver;
         const cudaDataType type = fmm::gpu::is_complex_scalar<T> ? CUDA_C_64F : CUDA_R_64F;
         size_t dbytes = 0, hbytes = 0;
-        check(cusolverDnXgeqrf_bufferSize(solver_, solver_params_, m, n, type, a, lda, type, tau, type, &dbytes, &hbytes),
+        check(cusolverDnXgeqrf_bufferSize(solver.handle(), solver.params(), m, n, type, a, lda, type, tau, type, &dbytes, &hbytes),
               "cusolverDnXgeqrf_bufferSize");
         DeviceHeap& heap = DeviceHeap::instance();
         const size_t wbytes = fmm::gpu::align_up(std::max<size_t>(dbytes, 1));
         char* dwork = heap.alloc<char>(wbytes + sizeof(int));
         int* dinfo = reinterpret_cast<int*>(dwork + wbytes);
         std::vector<char> hwork(std::max<size_t>(hbytes, 1));
-        check(cusolverDnXgeqrf(solver_, solver_params_, m, n, type, a, lda, type, tau, type, dwork, dbytes, hwork.data(),
+        check(cusolverDnXgeqrf(solver.handle(), solver.params(), m, n, type, a, lda, type, tau, type, dwork, dbytes, hwork.data(),
                                hbytes, dinfo),
               "cusolverDnXgeqrf");
         heap.free(dwork);
@@ -1604,8 +1596,6 @@ private:
     MetaBuilder meta_;
     DeviceBuffer meta_device_;
     Stats stats_;
-    cusolverDnHandle_t solver_ = nullptr;
-    cusolverDnParams_t solver_params_ = nullptr;
 };
 
 }  // namespace gpu

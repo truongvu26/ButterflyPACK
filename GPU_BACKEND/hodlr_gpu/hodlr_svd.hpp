@@ -9,7 +9,7 @@
 #include "gpu_common/device_scalar.hpp"
 #include "h2_gpu/gpu_runtime.hpp"
 
-#include <cusolverDn.h>
+#include "hodlr_solver.hpp"
 
 #include <algorithm>
 #include <cstdint>
@@ -37,10 +37,6 @@ public:
     DeviceSvd() = default;
     DeviceSvd(const DeviceSvd&) = delete;
     DeviceSvd& operator=(const DeviceSvd&) = delete;
-    ~DeviceSvd() {
-        if (params_ != nullptr) cusolverDnDestroyParams(params_);
-        if (handle_ != nullptr) cusolverDnDestroy(handle_);
-    }
 
     // a (m x n, leading dimension m) = u diag(s) v^H with u (m x mn), s (mn,
     // descending), v (n x mn), mn = min(m, n), all on the device (a
@@ -51,22 +47,18 @@ public:
         fmm::gpu::Context& ctx = fmm::gpu::Context::instance();
         ctx.activate();
         const cudaStream_t stream = ctx.stream();
-        if (handle_ == nullptr) {
-            check(cusolverDnCreate(&handle_), "cusolverDnCreate");
-            check(cusolverDnCreateParams(&params_), "cusolverDnCreateParams");
-        }
-        check(cusolverDnSetStream(handle_, stream), "cusolverDnSetStream");
+        CuSolverLease solver;
         const cudaDataType type = fmm::gpu::is_complex_scalar<T> ? CUDA_C_64F : CUDA_R_64F;
         fmm::gpu::DeviceHeap& heap = fmm::gpu::DeviceHeap::instance();
         int* dinfo = heap.alloc<int>(sizeof(int));
         size_t dbytes = 0, hbytes = 0;
-        check(cusolverDnXgesvdp_bufferSize(handle_, params_, CUSOLVER_EIG_MODE_VECTOR, 1, m, n, type, da, m,
+        check(cusolverDnXgesvdp_bufferSize(solver.handle(), solver.params(), CUSOLVER_EIG_MODE_VECTOR, 1, m, n, type, da, m,
                                            CUDA_R_64F, ds, type, du, m, type, dv, n, type, &dbytes, &hbytes),
               "cusolverDnXgesvdp_bufferSize");
         char* dwork = heap.alloc<char>(std::max<size_t>(dbytes, 1));
         std::vector<char> hwork(std::max<size_t>(hbytes, 1));
         double err_sigma = 0.0;
-        check(cusolverDnXgesvdp(handle_, params_, CUSOLVER_EIG_MODE_VECTOR, 1, m, n, type, da, m, CUDA_R_64F, ds, type,
+        check(cusolverDnXgesvdp(solver.handle(), solver.params(), CUSOLVER_EIG_MODE_VECTOR, 1, m, n, type, da, m, CUDA_R_64F, ds, type,
                                 du, m, type, dv, n, type, dwork, dbytes, hwork.data(), hbytes, dinfo, &err_sigma),
               "cusolverDnXgesvdp");
         int info = 0;
@@ -100,8 +92,6 @@ private:
         }
     }
 
-    cusolverDnHandle_t handle_ = nullptr;
-    cusolverDnParams_t params_ = nullptr;
 };
 
 }  // namespace gpu
