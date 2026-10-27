@@ -1,7 +1,8 @@
 # Experimental rectangular low-rank GPU interface
 
 The `feature/gpu-rectangular-schur` branch adds an opt-in GPU path for
-standalone level-zero `c_bf_*` handles. It reuses the HODLR BACA, split,
+standalone level-zero `c_bf_*` handles. Initialize device sharing/exchange
+on the full solver communicator before activation or image upload. It reuses the HODLR BACA, split,
 TSQR and factor redistribution implementation. Set `HODLR_use_gpu` to 1 or 2 on the BF options, then activate with
 `[dz]_c_bf_enable_gpu` after `c_bf_construct_init`; optionally register a
 block evaluator before `c_bf_construct_element_compute`. Without an evaluator,
@@ -31,7 +32,19 @@ owner alive through native deletion and finish queued callbacks before
 releasing borrowed data. Image memory competes with native factors; a
 per-matrix byte bound is not an aggregate solver memory budget.
 
-The paired STRUMPACK branch `feature/hodlr-gpu-rectangular-schur` provides
-independent real/complex dense-reference tests, stride and ownership checks,
-and one-/four-rank multiple-front sparse solves. Validation is pending;
-results belong in STRUMPACK's HODLR_GPU_RECTANGULAR.json/rst record.
+The paired STRUMPACK branch `feature/hodlr-gpu-rectangular-schur` validates
+independent real/complex dense references, N/T/C products and Schur
+applications, padded one/three RHS, moved owners, three-/four-rank process
+groups and MPI_SELF work while other solver ranks wait. Jobs 60390291 and
+60392134 pass the direct tests and six 40-cubed multiple-front sparse
+variants. The evaluator kernel contract test reports zero Compute Sanitizer
+memory errors (the native sparse solver is not run under the sanitizer).
+
+Job 60390292 passes twelve 60-cubed, three-RHS trials on one allocation:
+four ranks sharing two GPUs, three trials per variant. Median factor-plus-
+solve is 46.523 s for the original hybrid and 31.190 s with bounded GPU
+construction, versus 46.202 s with rectangular multiplies/device Schur alone
+and 45.095 s on CPU. All trials use six refinement iterations. This is
+one controlled regime; host preparation, per-block residency bounds and
+large-front fallbacks remain. Exact source/binary provenance and results
+belong in STRUMPACK's HODLR_GPU_RECTANGULAR.json/rst record.

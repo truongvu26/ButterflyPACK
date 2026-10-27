@@ -78,3 +78,10 @@ all of them; those that concern this backend:
 - `BPACK_TRACE=hodlr-qr` prints each block and chunk of the recompression
   QR; `sync` synchronizes after each step, so that an asynchronous device
   fault is reported by the kernel that caused it.
+
+## Experimental standalone rectangular extension
+
+The `feature/gpu-rectangular-schur` branch adds standalone level-zero BF GPU
+compression/multiplies and compound Schur applications with device
+intermediates. See [the integration record](../../doc/strumpack_rectangular_gpu.md)
+for activation, ownership, supported configurations and validation.
