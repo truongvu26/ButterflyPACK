@@ -34,6 +34,12 @@ public:
         check_cuda(cudaStreamSynchronize(ctx.stream()),"rectangular upload");
         ready_=true;
     }
+    void conjugate_in_place(T* a,int rows,int cols) {
+        if constexpr (fmm::gpu::is_complex_scalar<T>) {
+            auto& ctx=Context::instance(); ctx.activate();
+            conjugate(a,a,rows,cols,ctx.stream());
+        }
+    }
     // Synchronous on the backend stream. Input/output are packed local arrays.
     // Only k*nrhs coefficients use host staging for non-GPU-aware MPI.
     double mult(char op, int nrhs, const T* x, T* y, int mode, bool device=false) {

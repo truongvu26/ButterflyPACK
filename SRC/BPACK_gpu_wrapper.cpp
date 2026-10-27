@@ -150,7 +150,7 @@ void c_bpack_gpu_schur_product(void* left,void* diagonal,void* right,const char*
                                const void* x,void* y,const int* mode) {
 #ifdef BPACK_GPU_ENABLED
   try {
-    if (*op!='N' && *op!='T') throw std::invalid_argument("device Schur product supports N/T");
+    if (*op!='N' && *op!='T' && *op!='C') throw std::invalid_argument("invalid device Schur transpose");
     auto* st1=state_of(left,"Schur left"); auto* st2=state_of(right,"Schur right");
     auto* diag=state_of(diagonal,"Schur diagonal");
     if (!st1->rectangular || !st2->rectangular || !diag->unsym || !diag->unsym->ready())
@@ -174,9 +174,12 @@ void c_bpack_gpu_schur_product(void* left,void* diagonal,void* right,const char*
     Scalar* q=heap.alloc<Scalar>(std::max<size_t>(mb,sizeof(Scalar)));
     Scalar* dy=heap.alloc<Scalar>(std::max<size_t>(ob,sizeof(Scalar)));
     if (ib) fmm::gpu::check_cuda(cudaMemcpyAsync(dx,x,ib,cudaMemcpyHostToDevice,ctx.stream()),"Schur input");
-    a.mult(*op,*nrhs,dx,p,*mode,true);
-    diag->unsym->solve(*op,*nrhs,p,q,true);
-    z.mult(*op,*nrhs,q,dy,*mode,true);
+    const char trans=*op=='C'?'T':*op;
+    if (*op=='C') a.conjugate_in_place(dx,ni,*nrhs);
+    a.mult(trans,*nrhs,dx,p,*mode,true);
+    diag->unsym->solve(trans,*nrhs,p,q,true);
+    z.mult(trans,*nrhs,q,dy,*mode,true);
+    if (*op=='C') z.conjugate_in_place(dy,no,*nrhs);
     if (ob) fmm::gpu::check_cuda(cudaMemcpyAsync(y,dy,ob,cudaMemcpyDeviceToHost,ctx.stream()),"Schur output");
     fmm::gpu::check_cuda(cudaStreamSynchronize(ctx.stream()),"Schur completion");
     heap.free(dy); heap.free(q); heap.free(p); heap.free(dx);

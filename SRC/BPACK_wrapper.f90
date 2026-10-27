@@ -4756,7 +4756,7 @@ contains
       integer i
       call c_f_pointer(bf_Cptr,blocks)
       call c_bpack_gpu_available(available)
-      call assert(available==1 .and. mode>0, 'Rectangular GPU backend unavailable')
+      call assert(available==1 .and. mode>0 .and. mode<=2, 'Rectangular GPU backend unavailable')
       call assert(blocks%level_butterfly==0, 'Rectangular GPU requires butterfly level zero')
       if (.not. c_associated(blocks%standalone_gpu)) then
          call c_bpack_gpu_create(blocks%standalone_gpu)
