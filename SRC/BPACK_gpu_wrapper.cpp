@@ -124,7 +124,9 @@ void c_bpack_bf_gpu_upload(void* gpu,const int* m,const int* n,const int* k,cons
   try {
     auto* st=state_of(gpu,"BF GPU upload");
     st->rectangular=std::make_unique<bpack::gpu::RectangularDevice<Scalar>>();
-    st->rectangular->upload(*m,*n,*k,static_cast<const Scalar*>(u),static_cast<const Scalar*>(v),MPI_Comm_f2c(*comm));
+    const auto* du=st->hodlr?static_cast<const Scalar*>(st->hodlr->mirror_ptr(u,static_cast<size_t>(*m)*(*k)*sizeof(Scalar))):nullptr;
+    const auto* dv=st->hodlr?static_cast<const Scalar*>(st->hodlr->mirror_ptr(v,static_cast<size_t>(*n)*(*k)*sizeof(Scalar))):nullptr;
+    st->rectangular->upload(*m,*n,*k,static_cast<const Scalar*>(u),static_cast<const Scalar*>(v),MPI_Comm_f2c(*comm),du,dv);
   } catch(const std::exception& e) { gpu_fail("BF GPU upload",e.what()); }
 #else
   gpu_fail("BF GPU upload","no GPU backend");
@@ -157,6 +159,12 @@ void c_bpack_gpu_schur_product(void* left,void* diagonal,void* right,const char*
     auto& z=*(*op=='N'?st2->rectangular:st1->rectangular);
     const int ni=*op=='N'?a.cols():a.rows(), middle=*op=='N'?a.rows():a.cols();
     const int no=*op=='N'?z.rows():z.cols();
+    const int second_middle=*op=='N'?z.cols():z.rows();
+    int comparison=MPI_UNEQUAL;
+    MPI_Comm_compare(a.comm(),z.comm(),&comparison);
+    if (*nrhs<0 || middle!=second_middle || !diag->hodlr || middle!=diag->hodlr->n_loc() ||
+        (comparison!=MPI_IDENT && comparison!=MPI_CONGRUENT))
+      throw std::invalid_argument("Schur local dimensions or ordered rank groups differ");
     auto& ctx=fmm::gpu::Context::instance(); ctx.activate();
     auto& heap=fmm::gpu::DeviceHeap::instance();
     const size_t ib=static_cast<size_t>(ni)*(*nrhs)*sizeof(Scalar), ob=static_cast<size_t>(no)*(*nrhs)*sizeof(Scalar);

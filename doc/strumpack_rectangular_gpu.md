@@ -10,7 +10,9 @@ The normal BF API is unchanged unless explicitly activated.
 
 The evaluator receives merged tree slots (rows `0..M-1`, columns
 `M..M+N-1`), rather than the application IDs of a square HODLR evaluator.
-Host copies of U/V remain valid for existing extraction. GPU multiplies
+Host copies of U/V remain valid for existing extraction. GPU-built device
+factors are borrowed directly from their matrix-owned mirrors, avoiding a
+second upload and factor allocation. GPU multiplies
 support real/complex N/T/C and sum rank-by-RHS coefficients on the front's
 borrowed communicator, using host staging initially.
 

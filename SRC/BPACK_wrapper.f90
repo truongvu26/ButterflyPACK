@@ -3014,6 +3014,7 @@ contains
       if (option%verbosity >= 0) call BF_checkError(blocks, option, msh, ker, stats, ptree, 0, option%verbosity)
       call BF_ComputeMemory(blocks, stats%Mem_Comp_for)
 
+      Memory=stats%Mem_Comp_for
       if (option%verbosity >= 2)call BF_print_size(blocks)
 
       !>**** delete neighours in msh

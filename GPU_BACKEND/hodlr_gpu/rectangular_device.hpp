@@ -11,23 +11,33 @@ public:
     int rows() const { return m_; }
     int cols() const { return n_; }
     int rank() const { return k_; }
-    void upload(int m, int n, int k, const T* u, const T* v, MPI_Comm comm) {
+    MPI_Comm comm() const { return comm_; }
+    void upload(int m, int n, int k, const T* u, const T* v, MPI_Comm comm,
+                const T* device_u=nullptr,const T* device_v=nullptr) {
         if (m < 0 || n < 0 || k <= 0 || comm == MPI_COMM_NULL)
             throw std::invalid_argument("Rectangular GPU dimensions/communicator");
         Context& ctx = Context::instance(); ctx.activate();
         release(); m_=m; n_=n; k_=k; comm_=comm;
         auto& heap=DeviceHeap::instance();
-        const size_t count=static_cast<size_t>(m+n)*k;
+        // GPU BACA already owns mirrors in the enclosing GpuState. Borrow
+        // those immutable buffers; the rectangular view dies before their
+        // HodlrDevice owner. CPU-built factors instead get owned storage.
+        if ((!m || device_u) && (!n || device_v)) {
+            u_=const_cast<T*>(device_u); v_=const_cast<T*>(device_v); ready_=true;
+            return;
+        }
+        const size_t count=(static_cast<size_t>(m)+n)*k;
         store_=heap.alloc_resident<T>(std::max<size_t>(count,1)*sizeof(T));
         u_=store_; v_=store_+static_cast<size_t>(m)*k;
         if (m) check_cuda(cudaMemcpyAsync(u_,u,static_cast<size_t>(m)*k*sizeof(T),cudaMemcpyHostToDevice,ctx.stream()),"rectangular U upload");
         if (n) check_cuda(cudaMemcpyAsync(v_,v,static_cast<size_t>(n)*k*sizeof(T),cudaMemcpyHostToDevice,ctx.stream()),"rectangular V upload");
         check_cuda(cudaStreamSynchronize(ctx.stream()),"rectangular upload");
+        ready_=true;
     }
-    // Synchronous on the backend stream. Input/output may have padded strides.
+    // Synchronous on the backend stream. Input/output are packed local arrays.
     // Only k*nrhs coefficients use host staging for non-GPU-aware MPI.
     double mult(char op, int nrhs, const T* x, T* y, int mode, bool device=false) {
-        if (!store_ || nrhs<0 || (op!='N' && op!='T' && op!='C'))
+        if (!ready_ || nrhs<0 || (op!='N' && op!='T' && op!='C'))
             throw std::invalid_argument("Rectangular GPU multiply state/op");
         auto& ctx=Context::instance(); ctx.activate();
         auto stream=ctx.stream(); auto& heap=DeviceHeap::instance();
@@ -72,8 +82,9 @@ private:
         char* md=meta_conj_.upload(md_conj_,stream);
         launch_col_scale(items.device(md),1,m,n,stream);
     }
-    void release() { if (store_) { DeviceHeap::instance().free(store_); store_=nullptr; } }
+    void release() { if (store_) DeviceHeap::instance().free(store_); store_=nullptr; ready_=false; }
     int m_=0,n_=0,k_=0; MPI_Comm comm_=MPI_COMM_NULL;
+    bool ready_=false;
     T *store_=nullptr,*u_=nullptr,*v_=nullptr;
     MetaBuilder meta_,meta_conj_; DeviceBuffer md_,md_conj_;
 };
