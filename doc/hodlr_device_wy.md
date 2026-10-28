@@ -50,3 +50,26 @@ before/after/after/before order, using the same quiet executable, GPU
 topology, tolerances and allocation. It reports speed ratios only after
 all four solves pass numerical validation. Frozen binary hashes and the
 exact native patch are retained with the run manifests.
+
+Validation completed with 168 independent real/complex WY checks, 288
+recompression comparisons, 12 direct SVD checks and 24 captured-factor
+comparisons (component job 60465148). Its later sparse launch failed
+before solver startup; corrected sparse job 60466018 passed 40 and
+100 cubed with three RHS. Component success is recorded separately from
+the original job's failed overall status.
+
+The complete 150-cubed sparse comparison, job 60467720, passed all four
+before/after/after/before trials on 32 ranks and 16 A100 40-GB GPUs.
+Median factor time decreased from 380.0015 to 347.048 seconds; median
+factor-plus-solve decreased from 384.256025 to 351.038845 seconds,
+a 1.09463x total speedup. The executable, tolerances, GPU allocation and
+sequential BLAS were identical; only the native library changed.
+Source revision `ab40497` corresponds to native library SHA256
+`66ebd85ba461d64bc840711661ad71ae400ec93fcea2677dcaa360b6be569bae`.
+The two new factor times, 346.975 and 347.121 seconds, agree closely,
+but this remains a small sample with randomized compression work.
+
+STRUMPACK's `doc/HODLR_GPU_DEVICE_WY.{json,rst}` records the full evidence,
+separate BLAS-worker/image-budget tests and the supplied external timing
+comparison. No full device frontal-entry evaluator or input-image lifetime
+change is included here.
