@@ -638,6 +638,11 @@ if (enable_h2_gpu)
   add_executable(hodlr_gpu_solver_resource_reuse EXCLUDE_FROM_ALL
                  GPU_BACKEND/hodlr_gpu/tests/solver_resource_reuse.cpp)
   target_link_libraries(hodlr_gpu_solver_resource_reuse butterflypack)
+  add_executable(hodlr_gpu_recompression_test EXCLUDE_FROM_ALL
+                 GPU_BACKEND/hodlr_gpu/tests/recompression.cpp)
+  target_include_directories(hodlr_gpu_recompression_test PRIVATE ${CMAKE_SOURCE_DIR}/GPU_BACKEND)
+  target_compile_features(hodlr_gpu_recompression_test PRIVATE cxx_std_20)
+  target_link_libraries(hodlr_gpu_recompression_test butterflypack)
 endif()
 
 set_target_properties(butterflypack PROPERTIES

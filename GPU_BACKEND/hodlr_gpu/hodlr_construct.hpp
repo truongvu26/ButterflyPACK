@@ -52,6 +52,9 @@ namespace gpu {
 
 template<typename T>
 class HodlrConstruct {
+    // Numerical regression tests inject explicit factors before recompression,
+    // avoiding BACA sampling and application callbacks when isolating QR/SVD.
+    friend struct HodlrConstructTestAccess;
 public:
     struct Stats {
         double t_eval = 0.0;     // dense leaves (s)
