@@ -1,0 +1,42 @@
+{
+  "status": "PASS",
+  "job": 60419636,
+  "cases": [
+    {
+      "rank": 0,
+      "cases": 56,
+      "maximum_error": 1.02500370134e-05,
+      "all_within_bound": true
+    },
+    {
+      "rank": 1,
+      "cases": 56,
+      "maximum_error": 1.02500370134e-05,
+      "all_within_bound": true
+    }
+  ],
+  "butterflypack_revision": "cdba24db077380a14c276b9e396535f0993947ac",
+  "basis_ranks": [
+    32,
+    64,
+    255,
+    256,
+    511,
+    512,
+    640
+  ],
+  "tolerances": [
+    1e-05,
+    1e-10
+  ],
+  "scalar_types": [
+    "double",
+    "complex double"
+  ],
+  "modes": [
+    "mixed batches",
+    "individual blocks"
+  ],
+  "coverage": "Independent host BLAS products, zero Householder coefficients, ill-conditioned factors, QR/SVD thresholds, two processes sharing one A100. This does not validate BACA sampling or frontal child extraction.",
+  "manifest": "BPACK cdba24db077380a14c276b9e396535f0993947ac\n70aac1e791c177e13ec967661bc5a7d574f977006db8cae9a58831dec164aa68  test\n16642dd4a20937f0d7213e1121553d8f0d8dc243440397430837b636a5c8111c  lib/libbutterflypack.so.5.0.0\n"
+}
