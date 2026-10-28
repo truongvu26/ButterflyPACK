@@ -1,5 +1,5 @@
 {
-  "status": "PASS",
+  "status": "NUMERICAL_FAILURE_OBSERVED_IN_PROFILE_FOLLOWUP",
   "strumpack_branch": "feature/hodlr-gpu-host-panels",
   "butterflypack_branch": "feature/gpu-host-panels",
   "strumpack_revision": "8d908c56",
@@ -1135,6 +1135,11 @@
   },
   "next_targets": [
     {
+      "priority": 0,
+      "target": "Explain and fix intermittent numerical failure before further feature optimization",
+      "evidence": "Profiled 60416427 and quiet GPU case in 60416297 both diverged; matched CPU case passed."
+    },
+    {
       "priority": 1,
       "target": "Device-accessible child and current-Schur entry extraction",
       "evidence": "Host-panel callbacks: 151.714 exclusive mean rank seconds (36.0% of factor envelope); native metadata 3.210 seconds and upload 0.330 seconds. Preserve collective ordering, sparse/child mappings and construction-only leases."
@@ -1144,5 +1149,19 @@
       "target": "Subtree arrival balance",
       "evidence": "Front 1254450 precompression gaps 0.904..157.386 seconds. Includes hierarchy/setup and waits, not pure MPI time; reassess placement after entry-extraction improvements."
     }
-  ]
+  ],
+  "profile_followup": {
+    "status": "COMPLETED_WITH_GPU_NUMERICAL_FAILURE",
+    "cpu_gpu_job": 60416297,
+    "first_profile_job": 60416427,
+    "repeat_profile_job": 60417148,
+    "first_profile_numerics": "Refinement diverged after a finite first correction, overflowed, and ended with NaN relative error after 210 iterations; not a passing accuracy result.",
+    "first_profile_collection": "srun --wait=30 killed Nsight report generation after untraced ranks exited. Fixed to --wait=0 with the existing outer timeout retained.",
+    "source_of_failure": "Not established. Both quiet and profiled GPU attempts failed, ruling out Nsight as the sole cause.",
+    "report": "HODLR_GPU_CPU_NSYS.json",
+    "quiet_cpu": "PASS: factor 854.156 s, solve 2.6076 s, relative error 4.74426e-10, residual 3.11758e-8",
+    "quiet_gpu": "FAIL: factor 558.144 s, refinement diverged to NaNs after 391 iterations",
+    "repeat_profile": "FAIL accuracy: factor 729.443 s, residual 1, relative error 1.63561e10; all four Nsight reports retained and parsed",
+    "profile_conclusion": "Visible host hotspots in ButterflyPACK WY recompression, extraction and MPI; ScaLAPACK attribution incomplete. See HODLR_GPU_CPU_NSYS.json."
+  }
 }
