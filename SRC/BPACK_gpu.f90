@@ -316,6 +316,28 @@ module BPACK_GPU
          integer(c_int) :: knn, na, bl(*), ru(*), jpvt(*), rskip(*)
       end subroutine c_bpack_hodlr_gpu_baca_append
 
+      subroutine c_bpack_hodlr_gpu_baca_residual(gpu, width, max_columns, relative, column1) &
+         bind(c, name="c_bpack_hodlr_gpu_baca_residual")
+         import :: c_ptr, c_int, c_double
+         type(c_ptr), value :: gpu
+         integer(c_int) :: width, max_columns, column1(*)
+         real(c_double) :: relative(*)
+      end subroutine c_bpack_hodlr_gpu_baca_residual
+
+      subroutine c_bpack_hodlr_gpu_baca_adopt_output(gpu, na, bl, rn) &
+         bind(c, name="c_bpack_hodlr_gpu_baca_adopt_output")
+         import :: c_ptr, c_int
+         type(c_ptr), value :: gpu
+         integer(c_int) :: na, bl(*), rn(*)
+      end subroutine c_bpack_hodlr_gpu_baca_adopt_output
+
+      subroutine c_bpack_hodlr_gpu_baca_dense_fallback(gpu, width, max_columns, replace) &
+         bind(c, name="c_bpack_hodlr_gpu_baca_dense_fallback")
+         import :: c_ptr, c_int
+         type(c_ptr), value :: gpu
+         integer(c_int) :: width, max_columns, replace(*)
+      end subroutine c_bpack_hodlr_gpu_baca_dense_fallback
+
       subroutine c_bpack_hodlr_gpu_baca_recompress(gpu, na, bl, tol, underflow, rn) &
          bind(c, name="c_bpack_hodlr_gpu_baca_recompress")
          import :: c_ptr, c_int, c_double

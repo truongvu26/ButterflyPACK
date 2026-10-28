@@ -1,6 +1,6 @@
 #pragma once
-// SVD of one dense device matrix (cuSOLVER gesvdp, polar decomposition
-// based): the recompression of the HODLR blocks of large rank and the root
+// SVD of one dense device matrix (cuSOLVER QR-based gesvd):
+// the recompression of the HODLR blocks of large rank and the root
 // of the merges' TSQR.
 
 #ifdef H2_HAVE_GPU
@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <cstdlib>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -40,9 +41,66 @@ public:
 
     // a (m x n, leading dimension m) = u diag(s) v^H with u (m x mn), s (mn,
     // descending), v (n x mn), mn = min(m, n), all on the device (a
-    // destroyed); returns the perturbation estimate of gesvdp, after the
-    // stream's work
+    // destroyed). QR-based gesvd is the default: polar gesvdp can perturb
+    // rank-deficient frontal blocks substantially despite info == 0.
+    // BPACK_GPU_HODLR_SVD=polar retains the old path for controlled diagnosis;
+    // its perturbation estimate is returned, QR returns zero.
     double svd_device(int m, int n, T* da, double* ds, T* du, T* dv) {
+        const char* driver = std::getenv("BPACK_GPU_HODLR_SVD");
+        if (driver && std::string(driver) == "polar") return svd_polar(m, n, da, ds, du, dv);
+        if (driver && std::string(driver) != "qr")
+            throw std::invalid_argument("BPACK_GPU_HODLR_SVD must be qr or polar");
+        return svd_qr(m, n, da, ds, du, dv);
+    }
+
+private:
+    static void transpose(int m, int n, const T* a, T* at, magma_queue_t queue) {
+        if constexpr (std::is_same_v<T, double>) magmablas_dtranspose(m, n, a, m, at, n, queue);
+        else magmablas_ztranspose_conj(m, n, reinterpret_cast<const magmaDoubleComplex*>(a), m,
+                                      reinterpret_cast<magmaDoubleComplex*>(at), n, queue);
+    }
+
+    double svd_qr(int m, int n, T* da, double* ds, T* du, T* dv) {
+        using fmm::gpu::check_cuda;
+        auto& ctx = fmm::gpu::Context::instance();
+        ctx.activate();
+        auto& heap = fmm::gpu::DeviceHeap::instance();
+        const auto stream = ctx.stream();
+        if (m < n) {
+            // gesvd requires a tall matrix. A^H = V S U^H swaps the two
+            // output factors and preserves the public U,S,V convention.
+            T* adjoint = heap.alloc<T>(static_cast<size_t>(m) * n * sizeof(T));
+            transpose(m, n, da, adjoint, ctx.queue());
+            svd_qr(n, m, adjoint, ds, dv, du);
+            heap.free(adjoint);
+            return 0.0;
+        }
+        CuSolverLease solver;
+        const cudaDataType type = fmm::gpu::is_complex_scalar<T> ? CUDA_C_64F : CUDA_R_64F;
+        // gesvd returns V^H, whereas the backend consumes V.
+        T* vt = heap.alloc<T>(static_cast<size_t>(n) * n * sizeof(T));
+        int* dinfo = heap.alloc<int>(sizeof(int));
+        size_t dbytes = 0, hbytes = 0;
+        check(cusolverDnXgesvd_bufferSize(solver.handle(), solver.params(), 'S', 'S', m, n, type, da, m,
+                                          CUDA_R_64F, ds, type, du, m, type, vt, n, type, &dbytes, &hbytes),
+              "cusolverDnXgesvd_bufferSize");
+        char* dwork = heap.alloc<char>(std::max<size_t>(dbytes, 1));
+        std::vector<char> hwork(std::max<size_t>(hbytes, 1));
+        check(cusolverDnXgesvd(solver.handle(), solver.params(), 'S', 'S', m, n, type, da, m, CUDA_R_64F, ds,
+                               type, du, m, type, vt, n, type, dwork, dbytes, hwork.data(), hbytes, dinfo),
+              "cusolverDnXgesvd");
+        transpose(n, n, vt, dv, ctx.queue());
+        int info = 0;
+        check_cuda(cudaMemcpyAsync(&info, dinfo, sizeof(int), cudaMemcpyDeviceToHost, stream), "SVD info");
+        check_cuda(cudaStreamSynchronize(stream), "QR-based SVD");
+        heap.free(dwork);
+        heap.free(dinfo);
+        heap.free(vt);
+        if (info != 0) throw std::runtime_error("cusolverDnXgesvd failed, info " + std::to_string(info));
+        return 0.0;
+    }
+
+    double svd_polar(int m, int n, T* da, double* ds, T* du, T* dv) {
         using fmm::gpu::check_cuda;
         fmm::gpu::Context& ctx = fmm::gpu::Context::instance();
         ctx.activate();
@@ -70,6 +128,7 @@ public:
         return err_sigma;
     }
 
+public:
     // Before the first SVD (GpuState::warm_up): the cuSOLVER handle and one
     // small SVD, so that no level pays their first use
     void warm_up() {

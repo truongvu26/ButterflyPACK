@@ -3219,9 +3219,20 @@ contains
       integer(c_int), allocatable :: idl(:)
       integer nseed, collective, maximum_active, panel_ierr
       integer, allocatable :: seed_save(:), seed_b(:)
+      ! Experimental complete residual certification of BACA convergence.
+      ! Unlike a random probe this also detects localized missed couplings.
+      character(len=16) :: guard_env
+      integer :: guard_status, maximum_fallback, post_attempt
+      logical :: residual_guard
+      integer(c_int) :: check_width, check_columns
+      integer(c_int), allocatable :: worst_column(:), repair_rank(:), replace_dense(:), repair_attempts(:)
+      real(c_double), allocatable :: residual_error(:)
+      logical, allocatable :: forced_columns(:), fallback_done(:)
 
       call c_bpack_hodlr_gpu_collective_mode(gpu, collective)
       if (nb == 0 .and. collective == 0) return
+      call get_environment_variable('BPACK_GPU_BACA_RESIDUAL_GUARD', guard_env, status=guard_status)
+      residual_guard = guard_status == 0 .and. trim(guard_env) == '1'
       if (present(seeds)) then
          call random_seed(size=nseed)
          allocate (seed_save(nseed), seed_b(nseed))
@@ -3231,6 +3242,11 @@ contains
       allocate (r0(nb), c0(nb), mm(nb), nn(nb), rest(nb), rank(nb), rank0(nb), itr(nb), itrmax(nb), rmin(nb))
       allocate (normA(nb), normUV(nb), active(nb), bl(nb), rul(nb), rskl(nb), rnl(nb), coff(nb + 1), jof(nb + 1))
       allocate (ruw(nb))
+      allocate (worst_column(nb), repair_rank(nb), residual_error(nb), forced_columns(nb), replace_dense(nb), fallback_done(nb), repair_attempts(nb))
+      repair_rank = -1
+      repair_attempts = 0
+      forced_columns = .false.
+      fallback_done = .false.
       do b = 1, nb
          blk => blks(b)%p
          r0(b) = blk%headm - 1
@@ -3240,8 +3256,19 @@ contains
          rest(b) = min(option%BACA_Batch, min(blk%M, blk%N))
          rmin(b) = min(blk%M, blk%N)
          itrmax(b) = floor_safe(min(blk%M, blk%N)/dble(rest(b)))*2
+         if (residual_guard) itrmax(b) = max(itrmax(b), rmin(b))
          maxmn = max(maxmn, blk%M, blk%N)
       enddo
+      check_width = 16
+      check_columns = 0
+      if (nb > 0) then
+         check_width = min(check_width, minval(rest))
+         check_columns = maxval(nn)
+      endif
+      if (collective == 1 .and. residual_guard) then
+         call MPI_ALLREDUCE(MPI_IN_PLACE, check_width, 1, MPI_INTEGER, MPI_MIN, ptree%Comm, panel_ierr)
+         call MPI_ALLREDUCE(MPI_IN_PLACE, check_columns, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, panel_ierr)
+      endif
 
       scale = option%scale_factor
       mode = option%HODLR_use_gpu
@@ -3378,7 +3405,7 @@ contains
                active(b) = .false.
                cycle
             endif
-            if (rank(b) == 0) then
+            if (rank(b) == 0 .and. .not. forced_columns(b)) then
                if (present(seeds)) then
                   do i = 1, nseed
                      seed_b(i) = mod(seeds(b), 100000)*7919 + i*104729 + 1
@@ -3389,12 +3416,59 @@ contains
                bc = b
                call c_bpack_hodlr_gpu_baca_set_columns(gpu, bc, perms)
             endif
+            forced_columns(b) = .false.
             nac = nac + 1
             bl(nac) = b
          enddo
          maximum_active = nac
          if (collective == 1) call MPI_ALLREDUCE(MPI_IN_PLACE, maximum_active, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, panel_ierr)
-         if (maximum_active == 0) exit
+         if (maximum_active == 0) then
+            if (.not. residual_guard) exit
+            ! All ranks enter the same stripe evaluations, including ranks
+            ! owning no blocks. Existing host extraction includes children.
+            call c_bpack_hodlr_gpu_baca_residual(gpu, check_width, check_columns, residual_error, worst_column)
+            nac = 0
+            replace_dense = 0
+            do b = 1, nb
+               ! Match the Frobenius budget of a relative SVD cutoff.
+               ! Together with recompression this stays within the final
+               ! 2*sqrt(min(m,n))*tol bound; avoid over-certifying BACA.
+               if (residual_error(b) <= sqrt(dble(rmin(b)))*tol) cycle
+               ! Runtime failure must remain enabled in Release builds.
+               if (fallback_done(b)) then
+                  write (*,*) 'GPU BACA exact-factor residual failed: block, error=', b, residual_error(b)
+                  call MPI_ABORT(ptree%Comm, 1, panel_ierr)
+                  stop 1
+               endif
+               if (rank(b) >= rmin(b) .or. rank(b) <= repair_rank(b) .or. itr(b) >= itrmax(b) .or. repair_attempts(b) >= 2) then
+                  replace_dense(b) = 1
+                  fallback_done(b) = .true.
+                  active(b) = .false.
+                  rank(b) = rmin(b)
+                  cycle
+               endif
+               repair_rank(b) = rank(b)
+               repair_attempts(b) = repair_attempts(b) + 1
+               ! Distinct contiguous columns containing the largest residual.
+               j = min(worst_column(b), nn(b) - rest(b) + 1)
+               do i = 1, rest(b)
+                  perms(i) = j + i - 1
+               enddo
+               bc = b
+               call c_bpack_hodlr_gpu_baca_set_columns(gpu, bc, perms)
+               active(b) = .true.
+               forced_columns(b) = .true.
+               normUV(b) = max(normA(b), 1d0)
+               nac = nac + 1
+            enddo
+            maximum_active = nac
+            if (collective == 1) call MPI_ALLREDUCE(MPI_IN_PLACE, maximum_active, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, panel_ierr)
+            maximum_fallback = sum(replace_dense)
+            if (collective == 1) call MPI_ALLREDUCE(MPI_IN_PLACE, maximum_fallback, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, panel_ierr)
+            if (maximum_fallback > 0) call c_bpack_hodlr_gpu_baca_dense_fallback(gpu, check_width, check_columns, replace_dense)
+            if (maximum_active == 0 .and. maximum_fallback == 0) exit
+            cycle
+         endif
          npass = npass + 1
          nblkit = nblkit + nac
 
@@ -3490,13 +3564,35 @@ contains
             bl(nq) = b
          endif
       enddo
+      ! Recompression may amplify cancellation in ill-conditioned BACA
+      ! factors. Certify its actual output, including on empty front ranks.
+      nac = nq
+      tol_c = option%tol_comp
+      uf_c = BPACK_SafeUnderflow
+      do post_attempt = 1, 2
+         if (nq > 0) call c_bpack_hodlr_gpu_baca_recompress(gpu, nac, bl, tol_c, uf_c, rnl)
+         if (.not. residual_guard) exit
+         call c_bpack_hodlr_gpu_baca_adopt_output(gpu, nac, bl, rnl)
+         call c_bpack_hodlr_gpu_baca_residual(gpu, check_width, check_columns, residual_error, worst_column)
+         replace_dense = 0
+         do a = 1, nq
+            b = bl(a)
+            ! SVD uses a relative singular-value cutoff. Its Frobenius
+            ! bound includes sqrt(min(m,n)), in addition to BACA's error.
+            if (residual_error(b) > 2d0*sqrt(dble(rmin(b)))*tol) replace_dense(b) = 1
+         enddo
+         maximum_fallback = sum(replace_dense)
+         if (collective == 1) call MPI_ALLREDUCE(MPI_IN_PLACE, maximum_fallback, 1, MPI_INTEGER, MPI_MAX, ptree%Comm, panel_ierr)
+         if (maximum_fallback == 0) exit
+         if (post_attempt == 2) then
+            write (*,*) 'GPU BACA recompressed exact factors failed residual certification'
+            call MPI_ABORT(ptree%Comm, 1, panel_ierr)
+            stop 1
+         endif
+         call c_bpack_hodlr_gpu_baca_dense_fallback(gpu, check_width, check_columns, replace_dense)
+      enddo
       if (nq > 0) then
-         ! all on the device (HodlrConstruct::recompress), then the new factors to the host, or
-         ! left on the device as merge matrices (dids, for HODLR_gpu_hmerge)
-         nac = nq
-         tol_c = option%tol_comp
-         uf_c = BPACK_SafeUnderflow
-         call c_bpack_hodlr_gpu_baca_recompress(gpu, nac, bl, tol_c, uf_c, rnl)
+         ! The certified factors go to the host, or stay as merge matrices.
          if (present(dids)) then
             allocate (idl(2*nq))
             call c_bpack_hodlr_gpu_baca_to_dm(gpu, nac, bl, rnl, idl)
@@ -3556,6 +3652,7 @@ contains
       enddo
       deallocate (r0, c0, mm, nn, rest, rank, rank0, itr, itrmax, rmin, normA, normUV, active, bl, rul, rskl, rnl)
       deallocate (coff, jof, ruw, perms)
+      deallocate (worst_column, repair_rank, residual_error, forced_columns, replace_dense, fallback_done, repair_attempts)
       if (present(seeds)) then
          call random_seed(put=seed_save)
          deallocate (seed_save, seed_b)

@@ -226,6 +226,231 @@ public:
         }
     }
 
+    // Certify the current factors against the application's complete block,
+    // rather than the norm of the last BACA update. A localized residual can
+    // be invisible to that update. Reuse panel storage: width <= every B.r,
+    // rank <= B.n, so no additional device allocation is needed. Collective
+    // evaluators require identical width/max_columns on all front ranks and
+    // an empty evaluation on ranks with no block in a stripe.
+    void residual(int width, int max_columns, double* relative, int* column1) {
+        const auto t0 = std::chrono::steady_clock::now();
+        Context& ctx = Context::instance();
+        ctx.activate();
+        const auto stream = ctx.stream();
+        const auto queue = ctx.queue();
+        const size_t nb = blocks_.size();
+        const char* trace_env = std::getenv("BPACK_GPU_BACA_RESIDUAL_TRACE");
+        const bool trace = trace_env && std::string(trace_env) == "1";
+        std::vector<long double> norm(nb, 0), error(nb, 0), largest(nb, -1);
+        for (size_t b = 0; b < nb; ++b) {
+            if (width <= 0 || width > blocks_[b].r || max_columns < blocks_[b].n)
+                throw std::invalid_argument("HODLR GPU residual: invalid stripe dimensions");
+            column1[b] = 1;
+        }
+        std::vector<T> host;
+        for (int first = 0; first < max_columns; first += width) {
+            ItemList<fmm::gpu::EvalItemT<T>> evals;
+            ItemList<AxpbyItem<T>> scales;
+            ItemList<fmm::gpu::GatherItemT<T>> gather;
+            VBatch<T> products;
+            for (Block& B : blocks_) {
+                const int nc = std::min(width, B.n - first);
+                if (nc <= 0) continue;
+                if (B.rank < 0 || B.rank > std::min(B.m, B.n))
+                    throw std::runtime_error("HODLR GPU residual: invalid factor rank");
+                if (trace) std::fprintf(stderr, "GPU_BACA_STRIPE first=%d m=%d n=%d nc=%d rank=%d\n",
+                                        first, B.m, B.n, nc, B.rank);
+                evals.add({B.c, B.m, B.m, nc, contiguous(B.r0), contiguous(B.c0 + first)}, B.m, nc);
+                if (scale_ != 1.0)
+                    scales.add({B.c, B.m, B.c, B.m, nullptr, 0, B.m, nc, T(scale_), T(0.0)}, B.m, nc);
+                if (B.rank > 0) {
+                    gather.add({B.rp, nc, nc, B.rank, B.vt, 1, B.n, contiguous(first), contiguous(0)}, nc, B.rank);
+                    products.entries.push_back({B.u, B.rp, B.c, B.m, nc, B.rank, B.m, nc, B.m});
+                }
+            }
+            meta_.clear();
+            evals.stage(meta_);
+            scales.stage(meta_);
+            gather.stage(meta_);
+            products.stage(meta_);
+            char* md = meta_.upload(meta_device_, stream);
+            entry_begin(stream);
+            evaluator_->eval<T>(evals.items, evals.device(md), evals.max_m, evals.max_n, md, points(), stream);
+            launch_axpby(scales.device(md), scales.count(), scales.max_m, scales.max_n, stream);
+            entry_end(stream);
+            check_cuda(cudaStreamSynchronize(stream), "HODLR GPU residual entries");
+            entry_collect();
+            if (trace) std::fprintf(stderr, "GPU_BACA_STRIPE first=%d entries_complete\n", first);
+            for (size_t b = 0; b < nb; ++b) {
+                const Block& B = blocks_[b];
+                const int nc = std::min(width, B.n - first);
+                if (nc <= 0) continue;
+                host.resize(static_cast<size_t>(B.m) * nc);
+                copy_down(host.data(), B.c, host.size());
+                for (const T& value : host) norm[b] += fmm::gpu::abs2(value);
+            }
+            fmm::gpu::launch_gather(gather.device(md), gather.count(), gather.max_m, gather.max_n, md, stream);
+            products.gemm(md, MagmaNoTrans, MagmaTrans, T(-1.0), T(1.0), queue);
+            check_cuda(cudaStreamSynchronize(stream), "HODLR GPU residual products");
+            if (trace) std::fprintf(stderr, "GPU_BACA_STRIPE first=%d products_complete\n", first);
+            for (size_t b = 0; b < nb; ++b) {
+                const Block& B = blocks_[b];
+                const int nc = std::min(width, B.n - first);
+                if (nc <= 0) continue;
+                host.resize(static_cast<size_t>(B.m) * nc);
+                copy_down(host.data(), B.c, host.size());
+                for (int j = 0; j < nc; ++j) {
+                    long double e = 0;
+                    for (int i = 0; i < B.m; ++i)
+                        e += fmm::gpu::abs2(host[static_cast<size_t>(j) * B.m + i]);
+                    error[b] += e;
+                    if (e > largest[b]) {
+                        largest[b] = e;
+                        column1[b] = first + j + 1;
+                    }
+                }
+            }
+        }
+        for (size_t b = 0; b < nb; ++b) {
+            relative[b] = norm[b] > 0 ? static_cast<double>(std::sqrt(error[b] / norm[b]))
+                                     : (error[b] == 0 ? 0 : std::numeric_limits<double>::infinity());
+            if (!std::isfinite(relative[b]))
+                throw std::runtime_error("HODLR GPU residual: nonfinite block or factors");
+        }
+        const double elapsed = seconds_since(t0);
+        stats_.t_panels += elapsed;
+        const char* log = std::getenv("BPACK_GPU_BACA_RESIDUAL_LOG");
+        if (log && std::string(log) == "1") {
+            double maximum = 0;
+            for (size_t b = 0; b < nb; ++b) maximum = std::max(maximum, relative[b]);
+            std::fprintf(stderr, "GPU_BACA_RESIDUAL blocks=%zu width=%d max_columns=%d max_error=%.9e seconds=%.6f\n",
+                         nb, width, max_columns, maximum, elapsed);
+        }
+    }
+
+    // Exact fallback when BACA saturates or cannot make rank progress. The
+    // smaller factor is an identity; the other holds A (or its transpose).
+    // Recompression still uses the normal QR/SVD path. No full matrix image
+    // beyond these factors is allocated; the existing panels stage stripes.
+    void dense_fallback(int width, int max_columns, const int* replace) {
+        const auto t0 = std::chrono::steady_clock::now();
+        Context& ctx = Context::instance();
+        ctx.activate();
+        const auto stream = ctx.stream();
+        // A post-recompression caller has already adopted every output.
+        release_out();
+        ItemList<fmm::gpu::IdentityItemT<T>> identities;
+        int count = 0;
+        for (size_t b = 0; b < blocks_.size(); ++b) {
+            if (!replace[b]) continue;
+            Block& B = blocks_[b];
+            if (width <= 0 || width > B.r || max_columns < B.n)
+                throw std::invalid_argument("HODLR GPU dense fallback: invalid stripe dimensions");
+            const int k = std::min(B.m, B.n);
+            grow(B, k);
+            B.rank = k;
+            identities.add({B.m <= B.n ? B.u : B.vt, k, k}, k, k);
+            ++count;
+        }
+        meta_.clear();
+        identities.stage(meta_);
+        char* md = meta_.upload(meta_device_, stream);
+        fmm::gpu::launch_identity(identities.device(md), identities.count(), identities.max_m, stream);
+        check_cuda(cudaStreamSynchronize(stream), "HODLR GPU exact identity");
+        for (int first = 0; first < max_columns; first += width) {
+            ItemList<fmm::gpu::EvalItemT<T>> evals;
+            ItemList<AxpbyItem<T>> scales;
+            ItemList<fmm::gpu::GatherItemT<T>> stores;
+            for (size_t b = 0; b < blocks_.size(); ++b) {
+                if (!replace[b]) continue;
+                Block& B = blocks_[b];
+                const int nc = std::min(width, B.n - first);
+                if (nc <= 0) continue;
+                evals.add({B.c, B.m, B.m, nc, contiguous(B.r0), contiguous(B.c0 + first)}, B.m, nc);
+                if (scale_ != 1.0)
+                    scales.add({B.c, B.m, B.c, B.m, nullptr, 0, B.m, nc, T(scale_), T(0.0)}, B.m, nc);
+                if (B.m <= B.n)
+                    stores.add({B.vt + first, B.n, nc, B.m, B.c, B.m, 1, contiguous(0), contiguous(0)}, nc, B.m);
+                else
+                    stores.add({B.u + static_cast<size_t>(first) * B.m, B.m, B.m, nc, B.c, 1, B.m,
+                                contiguous(0), contiguous(0)}, B.m, nc);
+            }
+            meta_.clear();
+            evals.stage(meta_);
+            scales.stage(meta_);
+            stores.stage(meta_);
+            md = meta_.upload(meta_device_, stream);
+            entry_begin(stream);
+            evaluator_->eval<T>(evals.items, evals.device(md), evals.max_m, evals.max_n, md, points(), stream);
+            launch_axpby(scales.device(md), scales.count(), scales.max_m, scales.max_n, stream);
+            entry_end(stream);
+            fmm::gpu::launch_gather(stores.device(md), stores.count(), stores.max_m, stores.max_n, md, stream);
+            check_cuda(cudaStreamSynchronize(stream), "HODLR GPU exact factors");
+            entry_collect();
+        }
+        const double elapsed = seconds_since(t0);
+        stats_.t_panels += elapsed;
+        const char* log = std::getenv("BPACK_GPU_BACA_RESIDUAL_LOG");
+        if (log && std::string(log) == "1")
+            std::fprintf(stderr, "GPU_BACA_DENSE_FALLBACK blocks=%d seconds=%.6f\n", count, elapsed);
+        // Optional, bounded capture for independent recompression replay.
+        // In particular, exact sparse factors can expose failures missed by
+        // random dense QR/SVD tests. Nothing is copied unless requested.
+        const char* dump = std::getenv("BPACK_GPU_BACA_FACTOR_DUMP");
+        if (dump && *dump) {
+            static size_t written = 0;
+            static unsigned long long sequence = 0;
+            const auto call = sequence++;
+            int rank = 0;
+            MPI_Comm_rank(MPI_COMM_WORLD, &rank); // diagnostic name, noncollective
+            for (size_t b = 0; b < blocks_.size(); ++b) {
+                if (!replace[b]) continue;
+                const Block& B = blocks_[b];
+                const size_t count_u = static_cast<size_t>(B.m) * B.rank;
+                const size_t count_v = static_cast<size_t>(B.n) * B.rank;
+                const size_t bytes = (count_u + count_v) * sizeof(T);
+                if (bytes > (size_t{64} << 20) || written + bytes > (size_t{256} << 20)) continue;
+                const std::string name = std::string(dump) + ".rank" + std::to_string(rank) +
+                    ".call" + std::to_string(call) + ".block" + std::to_string(b) + ".bin";
+                std::FILE* file = std::fopen(name.c_str(), "wb");
+                if (!file) throw std::runtime_error("Cannot open GPU factor capture " + name);
+                const uint64_t header[] = {0x524f544341465042ULL, static_cast<uint64_t>(B.m),
+                    static_cast<uint64_t>(B.n), static_cast<uint64_t>(B.rank), sizeof(T)};
+                bool ok = std::fwrite(header, sizeof(header), 1, file) == 1;
+                std::vector<T> host(std::max(count_u, count_v));
+                copy_down(host.data(), B.u, count_u);
+                ok = std::fwrite(host.data(), sizeof(T), count_u, file) == count_u && ok;
+                copy_down(host.data(), B.vt, count_v);
+                ok = std::fwrite(host.data(), sizeof(T), count_v, file) == count_v && ok;
+                const int closed = std::fclose(file);
+                if (!ok || closed) throw std::runtime_error("Incomplete GPU factor capture " + name);
+                written += bytes;
+                std::fprintf(stderr, "GPU_BACA_FACTOR_DUMP file=%s m=%d n=%d k=%d\n", name.c_str(), B.m, B.n, B.rank);
+            }
+        }
+    }
+
+    // Recompression overwrites the BACA factors with Householder data. Adopt
+    // its actual output before certification or a second compression pass.
+    // Keep the output allocation alive for the normal download/to_dm API.
+    void adopt_output(int na, const int* bl, const int* rn) {
+        if (static_cast<size_t>(na) != out_u_.size())
+            throw std::logic_error("HODLR GPU BACA: adopt output out of step");
+        Context::instance().activate();
+        const auto stream = Context::instance().stream();
+        for (int a = 0; a < na; ++a) {
+            Block& B = block(bl[a]);
+            if (rn[a] <= 0 || rn[a] > B.cap)
+                throw std::logic_error("HODLR GPU BACA: invalid output rank");
+            check_cuda(cudaMemcpyAsync(B.u, out_u_[a], static_cast<size_t>(B.m) * rn[a] * sizeof(T),
+                                       cudaMemcpyDeviceToDevice, stream), "HODLR GPU adopt U");
+            check_cuda(cudaMemcpyAsync(B.vt, out_v_[a], static_cast<size_t>(B.n) * rn[a] * sizeof(T),
+                                       cudaMemcpyDeviceToDevice, stream), "HODLR GPU adopt V");
+            B.rank = rn[a];
+        }
+        check_cuda(cudaStreamSynchronize(stream), "HODLR GPU adopt output");
+    }
+
     // Panels of the listed blocks from their current columns; core_out gets
     // the r x r cores C(I, :), packed in list order.  BACA (variant 4, LR_BACA)
     // takes I without masking the chosen rows, then J2 = the pivots of R,
@@ -870,7 +1095,7 @@ public:
     // The recompression (LR_ReCompression) of the listed blocks after their
     // BACA, all on the device: the QR of U and V^T (qr_device), the SVD of
     // R1 R2^T (MAGMA's batched one-sided Jacobi for ranks below kBigSvdRank,
-    // zero padded by size class; cuSOLVER gesvdp one by one for the others),
+    // zero padded by size class; cuSOLVER gesvd one by one for the others),
     // the new rank rn by the rule of SVD_Truncate (tol relative, underflow
     // absolute), and the new factors [X; 0] - Y Z (= Q [X; 0]) with X_U =
     // Us(:, 1:rn) diag(s), X_V = conj(Vs(:, 1:rn)) and Z = T Y1^H X, T^-1 =
@@ -1243,10 +1468,9 @@ private:
         const double k = std::min(r, n), mx = std::max(r, n);
         return kFlopScale * (2.0 * mx * k * k - 2.0 / 3.0 * k * k * k);
     }
-    // SVD of blocks of this rank and more one by one (cuSOLVER gesvdp), the
-    // others by MAGMA's batched one-sided Jacobi: on an A100 the batched SVD
-    // takes 0.1 ms a matrix of 100 x 100, 9 ms of 448 x 448 and 31 ms of
-    // 640 x 640, gesvdp 5, 15 and 27 ms
+    // SVD of blocks of this rank and more one by one (cuSOLVER gesvd), the
+    // others by MAGMA's batched one-sided Jacobi. Large blocks use QR-based
+    // gesvd because polar SVD can perturb rank-deficient frontal blocks
     static constexpr int kBigSvdRank = 512;
 
     // Pivot items of one launch: the ones with many columns spread over

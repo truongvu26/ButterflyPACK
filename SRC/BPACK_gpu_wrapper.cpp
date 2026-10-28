@@ -854,6 +854,49 @@ void c_bpack_hodlr_gpu_baca_append(void* gpu, const int* knn, const int* na, con
 #endif
 }
 
+// Full residual check before recompression. Called collectively by the
+// Fortran scheduler when using a host-panel evaluator.
+void c_bpack_hodlr_gpu_baca_residual(void* gpu, const int* width, const int* max_columns,
+                                   double* relative, int* column1) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    construct_of(gpu, "c_bpack_hodlr_gpu_baca_residual").residual(*width, *max_columns, relative, column1);
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_hodlr_gpu_baca_residual", e.what());
+  }
+#else
+  (void)gpu; (void)width; (void)max_columns; (void)relative; (void)column1;
+  gpu_fail("c_bpack_hodlr_gpu_baca_residual", "this library has no GPU backend");
+#endif
+}
+
+void c_bpack_hodlr_gpu_baca_adopt_output(void* gpu, const int* na, const int* bl, const int* rn) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    const std::vector<int> list = block_list(na, bl);
+    construct_of(gpu, "c_bpack_hodlr_gpu_baca_adopt_output").adopt_output(*na, list.data(), rn);
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_hodlr_gpu_baca_adopt_output", e.what());
+  }
+#else
+  (void)gpu; (void)na; (void)bl; (void)rn;
+  gpu_fail("c_bpack_hodlr_gpu_baca_adopt_output", "this library has no GPU backend");
+#endif
+}
+
+void c_bpack_hodlr_gpu_baca_dense_fallback(void* gpu, const int* width, const int* max_columns, const int* replace) {
+#ifdef BPACK_GPU_ENABLED
+  try {
+    construct_of(gpu, "c_bpack_hodlr_gpu_baca_dense_fallback").dense_fallback(*width, *max_columns, replace);
+  } catch (const std::exception& e) {
+    gpu_fail("c_bpack_hodlr_gpu_baca_dense_fallback", e.what());
+  }
+#else
+  (void)gpu; (void)width; (void)max_columns; (void)replace;
+  gpu_fail("c_bpack_hodlr_gpu_baca_dense_fallback", "this library has no GPU backend");
+#endif
+}
+
 // The recompression of the listed blocks after their BACA, all on the GPU
 // (HodlrConstruct::recompress): rn the new ranks; the new factors stay for
 // c_bpack_hodlr_gpu_baca_download
