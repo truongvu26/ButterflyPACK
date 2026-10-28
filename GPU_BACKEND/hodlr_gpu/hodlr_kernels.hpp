@@ -97,18 +97,24 @@ struct ColScaleItem {
 template<typename T>
 void launch_col_scale(const ColScaleItem<T>* items, int count, int max_m, int max_n, cudaStream_t stream);
 
-// t (k x k) = T^-1 of the compact WY form of ?geqrf's Q = I - Y T Y^H:
-// striu(gram) + diag(1 / tau), zero below the diagonal (gram = Y^H Y)
+// Prepare the compact WY application z = T z for Q = I - Y T Y^H.
+// With D = diag(tau) and G = strict_upper(Y^H Y), T satisfies
+// (I + D G) T = D, including zero Householder coefficients. Build the
+// unit upper matrix t = I + D G and row-scale z by D in place; the caller
+// then solves t z = z. This avoids division by tau and host fallbacks.
 template<typename T>
-struct TinvItem {
+struct WySolveItem {
     T* t;
     const T* gram;
     int ldg;
     const T* tau;
     int k;
+    T* z;
+    int ldz;
+    int nrhs;
 };
 template<typename T>
-void launch_tinv(const TinvItem<T>* items, int count, int max_k, cudaStream_t stream);
+void launch_wy_solve_setup(const WySolveItem<T>* items, int count, int max_k, int max_rhs, cudaStream_t stream);
 
 // c = alpha a + beta b (m x n); b may be null (then c = alpha a), and c may be
 // a or b.

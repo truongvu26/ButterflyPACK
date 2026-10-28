@@ -604,22 +604,31 @@ void launch_col_scale(const ColScaleItem<T>* items, int count, int max_m, int ma
 }
 
 template<typename T>
-__global__ void tinv_kernel(const TinvItem<T>* items) {
-    const TinvItem<T> it = items[blockIdx.x];
-    const int j = blockIdx.y;
-    if (j >= it.k) return;
-    T* col = it.t + static_cast<long long>(j) * it.k;
-    const T* g = it.gram + static_cast<long long>(j) * it.ldg;
-    for (int i = threadIdx.x; i < it.k; i += blockDim.x) {
-        col[i] = i < j ? g[i] : (i == j ? T(1.0) / it.tau[j] : T(0.0));
+__global__ void wy_solve_setup_kernel(const WySolveItem<T>* items) {
+    const WySolveItem<T> it = items[blockIdx.x];
+    const long long matrix = static_cast<long long>(it.k) * it.k;
+    const long long total = matrix + static_cast<long long>(it.k) * it.nrhs;
+    for (long long e = static_cast<long long>(blockIdx.y) * blockDim.x + threadIdx.x; e < total;
+         e += static_cast<long long>(gridDim.y) * blockDim.x) {
+        if (e < matrix) {
+            const int i = static_cast<int>(e % it.k);
+            const long long j = e / it.k;
+            it.t[e] = i < j ? it.tau[i] * it.gram[i + j * it.ldg] : (i == j ? T(1.0) : T(0.0));
+        } else {
+            const long long rhs = e - matrix;
+            const int i = static_cast<int>(rhs % it.k);
+            T& z = it.z[i + (rhs / it.k) * it.ldz];
+            z = it.tau[i] * z;
+        }
     }
 }
 
 template<typename T>
-void launch_tinv(const TinvItem<T>* items, int count, int max_k, cudaStream_t stream) {
+void launch_wy_solve_setup(const WySolveItem<T>* items, int count, int max_k, int max_rhs, cudaStream_t stream) {
     if (count <= 0 || max_k <= 0) return;
-    tinv_kernel<T><<<dim3(static_cast<unsigned>(count), static_cast<unsigned>(max_k)), kThreads, 0, stream>>>(items);
-    check_launch("tinv_kernel");
+    const dim3 grid(static_cast<unsigned>(count), tiles(static_cast<long long>(max_k) * (max_k + max_rhs)));
+    wy_solve_setup_kernel<T><<<grid, kThreads, 0, stream>>>(items);
+    check_launch("wy_solve_setup_kernel");
 }
 
 template<typename T>
@@ -653,7 +662,7 @@ void launch_gather_rows(const T* a, int lda, int k, const int* rows, int n, T* o
     template void launch_fnorm<T>(const NormItem<T>*, int, cudaStream_t);                             \
     template void launch_zero_lower<T>(const TriuItem<T>*, int, int, cudaStream_t);                   \
     template void launch_col_scale<T>(const ColScaleItem<T>*, int, int, int, cudaStream_t);           \
-    template void launch_tinv<T>(const TinvItem<T>*, int, int, cudaStream_t);                          \
+    template void launch_wy_solve_setup<T>(const WySolveItem<T>*, int, int, int, cudaStream_t);       \
     template void launch_gather_rows<T>(const T*, int, int, const int*, int, T*, cudaStream_t);
 BPACK_HODLR_KERNELS(double)
 BPACK_HODLR_KERNELS(dcomplex)

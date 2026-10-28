@@ -17,7 +17,7 @@
 //     = the pivots of R with the chosen columns masked;
 // and at the end the recompression (LR_ReCompression): QR of U and V^T
 // (MAGMA batched geqrf, zero padded), with the products by Q in compact WY
-// form, Q [X; 0] = [X; 0] - Y (T (Y1^H X)), T and Y1^H X from the host.
+// form, Q [X; 0] = [X; 0] - Y (T (Y1^H X)), entirely on the device.
 // The optional k-nearest-neighbour step (option%knn) seeds the blocks from
 // the panels of the listed rows and columns first.
 // Point slots are tree indices - 1; rows and columns of a block are local
@@ -1259,24 +1259,14 @@ public:
             xc += 2 * static_cast<size_t>(k) * rn[a];
         }
 
-        // X, then Y1^H X in place of Z, then Z = T (Y1^H X) by the triangular solve with T^-1
+        // X, then Z = T (Y1^H X) using (I + diag(tau) G) Z = diag(tau) Y1^H X,
+        // G = strict_upper(Y^H Y). Unit diagonal keeps the solve valid for zero tau.
         T* xb = heap.alloc<T>(std::max<size_t>(2 * xc, 1) * sizeof(T));
         T* zb = xb + xc;
         check_cuda(cudaMemsetAsync(xb, 0, std::max<size_t>(xc, 1) * sizeof(T), stream), "HODLR GPU recompression X");
-        std::vector<size_t> x_at(n_a);
-        std::vector<char> host_t(n_a, 0);  // (a zero tau: T by the larft recurrence on the host)
-        {
-            std::vector<T> ht(std::max<size_t>(q.taus, 1));
-            if (q.taus > 0) check_cuda(cudaMemcpy(ht.data(), q.tau, q.taus * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU tau");
-            for (size_t a = 0; a < n_a; ++a) {
-                for (int i = 0; i < 2 * ks[a]; ++i) {
-                    if (ht[q.tau_at[a] + i] == T(0.0)) host_t[a] = 1;
-                }
-            }
-        }
         meta_.clear();
         ItemList<ColScaleItem<T>> xs;
-        ItemList<TinvItem<T>> ti;
+        ItemList<WySolveItem<T>> wy;
         VBatch<T> yp;
         std::vector<magma_int_t> tm, tn, tlda, tldb;
         std::vector<T*> tA, tB;
@@ -1284,7 +1274,6 @@ public:
         for (size_t a = 0; a < n_a; ++a) {
             const Block& B = block(bl[a]);
             const int k = ks[a], r = rn[a];
-            x_at[a] = at;
             T* xu = xb + at;
             T* xv = xu + static_cast<size_t>(k) * r;
             T* yu = zb + at;
@@ -1297,12 +1286,11 @@ public:
             yp.entries.push_back({B.u, xu, yu, k, r, k, B.m, k, k});
             yp.entries.push_back({B.vt, xv, yv, k, r, k, B.n, k, k});
             stats_.flops += kFlopScale * 4.0 * static_cast<double>(k) * k * r;
-            if (host_t[a]) continue;
             T* t1 = rb + 2 * sq_at[a];
             T* t2 = t1 + static_cast<size_t>(k) * k;
             const T* gu = q.gram + q.top_at[a];
-            ti.add({t1, gu, k, q.tau + q.tau_at[a], k}, k, k);
-            ti.add({t2, gu + static_cast<size_t>(k) * k, k, q.tau + q.tau_at[a] + k, k}, k, k);
+            wy.add({t1, gu, k, q.tau + q.tau_at[a], k, yu, k, r}, k, r);
+            wy.add({t2, gu + static_cast<size_t>(k) * k, k, q.tau + q.tau_at[a] + k, k, yv, k, r}, k, r);
             for (int side = 0; side < 2; ++side) {
                 tm.push_back(k);
                 tn.push_back(r);
@@ -1324,23 +1312,20 @@ public:
         tlda.push_back(0);
         tldb.push_back(0);
         xs.stage(meta_);
-        ti.stage(meta_);
+        wy.stage(meta_);
         yp.stage(meta_);
         const size_t off_tm = meta_.append(tm), off_tn = meta_.append(tn), off_tlda = meta_.append(tlda);
         const size_t off_tldb = meta_.append(tldb), off_tA = meta_.append(tA), off_tB = meta_.append(tB);
         char* md = meta_.upload(meta_device_, stream);
         launch_col_scale(xs.device(md), xs.count(), xs.max_m, xs.max_n, stream);
-        launch_tinv(ti.device(md), ti.count(), ti.max_n, stream);
         yp.gemm(md, MagmaConjTrans, MagmaNoTrans, T(1.0), T(0.0), queue);
+        launch_wy_solve_setup(wy.device(md), wy.count(), wy.max_m, wy.max_n, stream);
         if (ntr > 0) {
             trsm_vbatched(max_tm, max_tn, reinterpret_cast<magma_int_t*>(md + off_tm), reinterpret_cast<magma_int_t*>(md + off_tn),
                           reinterpret_cast<T**>(md + off_tA), reinterpret_cast<magma_int_t*>(md + off_tlda),
                           reinterpret_cast<T**>(md + off_tB), reinterpret_cast<magma_int_t*>(md + off_tldb), ntr, queue);
         }
         check_cuda(cudaStreamSynchronize(stream), "HODLR GPU recompression Z");
-        for (size_t a = 0; a < n_a; ++a) {
-            if (host_t[a]) host_wy(ks[a], rn[a], q.gram + q.top_at[a], q.tau + q.tau_at[a], zb + x_at[a]);
-        }
         heap.free(sb);
         heap.free(vb);
         heap.free(ub);
@@ -1610,39 +1595,6 @@ private:
         }
     }
 
-    // Z = T Y1^H X for a block with a zero tau (U's then V's, each k x rn,
-    // Y1^H X in z on entry), T by the recurrence of ?larft ('F', 'C') on the host
-    static void host_wy(int k, int rn, const T* gram, const T* tau, T* z) {
-        const size_t kk = static_cast<size_t>(k) * k, kr = static_cast<size_t>(k) * rn;
-        std::vector<T> g(2 * kk), tv(2 * static_cast<size_t>(k)), y(2 * kr), zz(2 * kr), t(kk), v(static_cast<size_t>(k));
-        check_cuda(cudaMemcpy(g.data(), gram, 2 * kk * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU WY gram");
-        check_cuda(cudaMemcpy(tv.data(), tau, 2 * static_cast<size_t>(k) * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU WY tau");
-        check_cuda(cudaMemcpy(y.data(), z, 2 * kr * sizeof(T), cudaMemcpyDeviceToHost), "HODLR GPU WY rhs");
-        for (int side = 0; side < 2; ++side) {
-            const T* gs = g.data() + side * kk;
-            const T* ts = tv.data() + side * k;
-            std::fill(t.begin(), t.end(), T(0.0));
-            for (int i = 0; i < k; ++i) {
-                if (!(ts[i] == T(0.0))) {
-                    for (int j = 0; j < i; ++j) v[static_cast<size_t>(j)] = T(0.0) - ts[i] * gs[j + static_cast<size_t>(i) * k];
-                    for (int j = 0; j < i; ++j) {
-                        T acc = T(0.0);
-                        for (int l = j; l < i; ++l) acc += t[j + static_cast<size_t>(l) * k] * v[static_cast<size_t>(l)];
-                        t[j + static_cast<size_t>(i) * k] = acc;
-                    }
-                }
-                t[i + static_cast<size_t>(i) * k] = ts[i];
-            }
-            for (int c = 0; c < rn; ++c) {
-                for (int i = 0; i < k; ++i) {
-                    T acc = T(0.0);
-                    for (int l = i; l < k; ++l) acc += t[i + static_cast<size_t>(l) * k] * y[side * kr + l + static_cast<size_t>(c) * k];
-                    zz[side * kr + i + static_cast<size_t>(c) * k] = acc;
-                }
-            }
-        }
-        check_cuda(cudaMemcpy(z, zz.data(), 2 * kr * sizeof(T), cudaMemcpyHostToDevice), "HODLR GPU WY Z");
-    }
     // device time of the entry evaluations (Stats::t_entry): an event pair
     // around each launch, read after the synchronization that follows
     void entry_begin(cudaStream_t stream) {
