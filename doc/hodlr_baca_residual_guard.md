@@ -86,7 +86,41 @@ passed 288 independent recompression comparisons, 12 direct SVD checks,
 the captured-front replays, and a full 40-cubed three-RHS sparse solve
 (error 5.29e-12, scaled residual 1.44e-11). Its strict-guard 100-cubed run
 timed out at six minutes; that case is not a PASS. The norm-budget
-revision is being checked in job 60422977; its 40-cubed solve passed
-(error 1.01e-11, scaled residual 1.51e-10), with 100-cubed pending.
-The final Frobenius acceptance bound is unchanged. No updated 150-cubed
-accuracy or speed claim is made yet.
+revision was checked in job 60422977; its 40-cubed solve passed
+(error 1.01e-11, scaled residual 1.51e-10), while its four-rank 100-cubed
+case also timed out at six minutes. The final Frobenius acceptance bound
+is unchanged. Target-layout results follow.
+
+
+The final norm-budget code also passed the 100-cubed sparse test on
+32 ranks/16 GPUs (60423305): factor 132.915 s, solve 0.605141 s, relative
+error 1.63058e-13 and scaled residual 1.43934e-11.
+
+On 150-cubed Poisson with three RHS, the default GPU path (QR SVD,
+certification disabled) passed in 60424358: factor 379.926 s, solve
+4.84846 s, relative error 3.21923e-10, scaled residual 2.47194e-8 and
+maximum HODLR rank 989. The matched CPU case (60423044) passed with
+838.071 s factor, 3.31297 s solve and rank 988. This one pair gives a
+2.19x factor-plus-solve speedup; it is not a repeated benchmark.
+
+The certified GPU case (60423201) also passed, with 1174.06 s factor,
+1.59843 s solve, relative error 8.89732e-13 and scaled residual
+7.75199e-11. Full certification therefore cost 3.06x the default GPU
+factor-plus-solve time in these runs and remains opt-in.
+
+Nsight job 60425000 completed successfully on the default path: factor
+391.597 s, solve 7.90356 s, relative error 5.31009e-10 and scaled residual
+3.11648e-8. CPU/CUDA summaries were collected for ranks 0, 11, 15 and 31.
+Their factor kernel unions are 26.54--46.99 s within a 391.60 s envelope.
+Host-panel preparation is 37.17% of all-rank exclusive factor rank-time;
+the native `host_wy` fallback is 3.70--20.06% of selected-rank leaf CPU
+samples. Host assembly/extraction, the host WY recurrence and small
+transfer overhead are the next measured targets. ScaLAPACK frames are
+visible, but incomplete stacks prevent an exact exclusive attribution.
+The STRUMPACK report `doc/HODLR_GPU_QR_SVD_PROFILE.{json,rst}` records
+the measurements and collection caveats: possible missing NVTX events,
+four incomplete CUPTI events dropped at stop per selected process, and
+unavailable kernel-space CPU stacks. The independent rank CSV envelopes
+partition correctly and the observed factor NVTX envelopes agree within
+0.02 s. These selected-process traces do not measure whole-device
+utilization. The earlier held request 60423202 was superseded and cancelled.
